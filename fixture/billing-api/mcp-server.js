@@ -96,9 +96,43 @@ let server = createServer();
 
 if (process.env.MCP_TRANSPORT === 'http') {
   const port = Number(process.env.MCP_PORT || 4011);
+  const host = process.env.MCP_HOST || '127.0.0.1';
+  const isLoopback = host === '127.0.0.1' || host === '::1' || host === 'localhost';
+  const authToken = process.env.MCP_AUTH_TOKEN;
+  const trustedOrigins = new Set(
+    (process.env.MCP_TRUSTED_ORIGINS || `http://localhost:${port},http://127.0.0.1:${port}`)
+      .split(',')
+      .map((origin) => origin.trim())
+      .filter(Boolean),
+  );
+
+  if (!isLoopback && !authToken) {
+    throw new Error('MCP_AUTH_TOKEN is required when MCP_HOST is not loopback');
+  }
+  if (!isLoopback && !process.env.MCP_TRUSTED_ORIGINS) {
+    throw new Error('MCP_TRUSTED_ORIGINS is required when MCP_HOST is not loopback');
+  }
+
   const app = express();
-  app.use(express.json());
   const transports = new Map();
+
+  // Keep the security checks ahead of every MCP method, including session
+  // creation. Requests without an Origin are allowed for non-browser MCP
+  // clients; browser requests must come from an explicitly trusted origin.
+  app.use('/mcp', (req, res, next) => {
+    const origin = req.get('origin');
+    if (origin && !trustedOrigins.has(origin)) {
+      res.status(403).json({ error: 'Untrusted Origin' });
+      return;
+    }
+
+    if (authToken && req.get('authorization') !== `Bearer ${authToken}`) {
+      res.status(401).set('WWW-Authenticate', 'Bearer').json({ error: 'Unauthorized' });
+      return;
+    }
+    next();
+  });
+  app.use(express.json());
 
   app.post('/mcp', async (req, res) => {
     const requestedSession = req.headers['mcp-session-id'];
@@ -140,8 +174,8 @@ if (process.env.MCP_TRANSPORT === 'http') {
     });
   }
 
-  app.listen(port, '0.0.0.0', () => {
-    console.error(`Billing MCP HTTP server listening at http://localhost:${port}/mcp`);
+  app.listen(port, host, () => {
+    console.error(`Billing MCP HTTP server listening at http://${host}:${port}/mcp`);
   });
 } else {
   await server.connect(new StdioServerTransport());
