@@ -1,0 +1,23 @@
+{
+  "name": "shopkart-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "A fake company for the erasure agent to work on. All data is generated.",
+  "scripts": {
+    "up": "docker compose up -d --wait",
+    "down": "docker compose down -v",
+    "seed": "node scripts/seed.js",
+    "truth": "node scripts/truth.js",
+    "mcp:billing": "node billing-api/mcp-server.js",
+    "reset": "npm run down && npm run up && npm run seed"
+  },
+  "dependencies": {
+    "@faker-js/faker": "^9.0.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "express": "^4.19.2",
+    "minio": "^8.0.1",
+    "pg": "^8.12.0",
+    "zod": "^3.23.8"
+  }
+}

@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: shopkart
+      POSTGRES_PASSWORD: shopkart
+      POSTGRES_DB: shopkart
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U shopkart"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: shopkart
+      MINIO_ROOT_PASSWORD: shopkart123
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # web console, handy for the demo video
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  billing-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      PORT: 4010
+    ports: ["4010:4010"]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:4010/health || exit 1"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
