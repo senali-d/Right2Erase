@@ -11,6 +11,12 @@
     "seed": "npm --workspace fixture run seed",
     "truth": "npm --workspace fixture run truth",
     "reset": "npm run down && npm run up && npm run seed",
+    "mcp:billing": "node mcp/billing-server.js",
+    "mcp:billing:http": "MCP_TRANSPORT=http MCP_PORT=4011 node mcp/billing-server.js",
+    "mcp:db": "node mcp/database-server.js",
+    "mcp:db:http": "MCP_TRANSPORT=http node mcp/database-server.js",
+    "mcp:storage": "node mcp/storage-server.js",
+    "mcp:storage:http": "MCP_TRANSPORT=http node mcp/storage-server.js",
     "test": "npm --workspaces run test --if-present"
   },
   "engines": { "node": ">=20" }
