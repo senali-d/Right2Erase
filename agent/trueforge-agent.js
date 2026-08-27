@@ -76,11 +76,13 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       const orderRows = rowsOf(orders);
       const orderIds = orderRows.map((order) => order.id).filter(Boolean);
       const orderNumbers = orderRows.map((order) => order.order_number).filter(Boolean);
+      const knownEmails = [...new Set([subject_email, ...rowsOf(emails).map((row) => row.email)])]
+        .filter(Boolean).slice(0, 100);
       const [items, refunds, retainedRefunds, logs] = await Promise.all([
         orderIds.length ? call('db_list_order_items', { order_ids: orderIds }) : [],
         orderIds.length ? call('db_list_refunds', { order_ids: orderIds }) : [],
         orderNumbers.length ? call('db_list_retained_refunds', { order_numbers: orderNumbers }) : [],
-        call('db_search_event_log', { emails: [subject_email], ip_address: account.last_seen_ip || undefined }),
+        call('db_search_event_log', { emails: knownEmails, ip_address: account.last_seen_ip || undefined }),
       ]);
 
       // Every deletable row becomes its own finding so plan_create can turn it
