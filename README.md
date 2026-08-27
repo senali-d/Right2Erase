@@ -20,9 +20,10 @@ Reset between demo takes:
 
 ## Repository
 
-- `fixture/` — ShopKart services, schema, seed data, and operator-only truth checker
+- `fixture/` — ShopKart fake services, schema, seed data, and operator-only truth checker
+- `mcp/` — agent-facing MCP adapters for the fake services
 - `docs/` — architecture and capability map
 
 ## Existing compatibility commands
 
-From `fixture/`: `npm run up`, `npm run seed`, `npm run truth`, `npm run reset`, and `npm run mcp:billing:http` remain available.
+From `fixture/`: `npm run up`, `npm run seed`, `npm run truth`, `npm run reset`, and `npm run mcp:billing:http` remain available. From the repository root, use `make mcp-billing-http` to start the billing MCP adapter.
