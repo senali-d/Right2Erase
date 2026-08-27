@@ -46,6 +46,31 @@ test('orchestrates all systems and certifies withheld actions', async () => {
   assert.equal(result.certificate.plan_hash, planHash);
   assert.equal(result.certificate.manifest.length, 3);
   assert.deepEqual(result.certificate.manifest.map((item) => item.system), ['postgres', 'minio', 'billing']);
+  assert.equal(getCase('success').status, 'completed');
+  assert.equal(db.prepare('SELECT status FROM execution_runs WHERE case_id = ? AND plan_hash = ?').get('success', planHash).status, 'completed');
+});
+
+test('keeps certificate, case, and execution run terminal state consistent on SQLite finalization failure', async () => {
+  const { planHash } = approvedCase('finalization-sqlite-error', [
+    { system: 'billing', record_type: 'customer', record_id: 'cus_finalization' },
+  ]);
+  db.exec(`CREATE TRIGGER fail_execution_finalization
+    BEFORE UPDATE OF status ON execution_runs
+    WHEN NEW.status = 'completed'
+    BEGIN SELECT RAISE(ABORT, 'simulated finalization sqlite error'); END;`);
+  try {
+    await assert.rejects(oublietteExecuteErasure({
+      caseId: 'finalization-sqlite-error', planHash, approvedBy: 'human@example.test',
+      interfaces: { billing: async () => ({ deleted: 1 }) },
+    }), /simulated finalization sqlite error/);
+  } finally {
+    db.exec('DROP TRIGGER fail_execution_finalization');
+  }
+
+  assert.equal(getCase('finalization-sqlite-error').status, 'failed');
+  assert.equal(getCase('finalization-sqlite-error').certificate, undefined);
+  assert.equal(db.prepare('SELECT status FROM execution_runs WHERE case_id = ? AND plan_hash = ?')
+    .get('finalization-sqlite-error', planHash).status, 'failed');
 });
 
 test('passes each destructive adapter its required execution envelope', async () => {

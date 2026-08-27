@@ -169,7 +169,12 @@ function recordExecutionCertificate({ caseId, planHash, approvedBy, manifest = [
 
     db.prepare(`INSERT INTO certificates (case_id, plan_hash, approved_by, manifest, withheld, executed_at)
       VALUES (?, ?, ?, ?, ?, ?)`).run(caseId, planHash, approvedBy, JSON.stringify(manifest), JSON.stringify(withheld), timestamp);
-    db.prepare("UPDATE cases SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'executing'").run(timestamp, caseId);
+    const completedCase = db.prepare("UPDATE cases SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'executing'")
+      .run(timestamp, caseId);
+    if (completedCase.changes !== 1) throw new Error('case completion failed');
+    const completedRun = db.prepare("UPDATE execution_runs SET status = 'completed', updated_at = ? WHERE case_id = ? AND plan_hash = ? AND status = 'executing'")
+      .run(timestamp, caseId, planHash);
+    if (completedRun.changes !== 1) throw new Error('execution run completion failed');
   });
   transaction();
   return hydrate(db.prepare('SELECT * FROM certificates WHERE case_id = ?').get(caseId));
@@ -260,8 +265,6 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
     }
     const certificate = recordExecutionCertificate({ caseId, planHash, approvedBy,
       manifest: confirmedManifest, withheld });
-    db.prepare("UPDATE execution_runs SET status = 'completed', updated_at = ? WHERE case_id = ? AND plan_hash = ? AND status = 'executing'")
-      .run(now(), caseId, planHash);
     return { case_id: caseId, plan_hash: planHash, approved_by: approvedBy, systems, withheld, certificate };
   } catch (error) {
     const failedAt = now();
