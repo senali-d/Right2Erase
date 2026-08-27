@@ -41,6 +41,8 @@ function normalizePlan(plan) {
 
   for (const action of plan.actions) {
     if (!action) throw new Error('plan action must be an object');
+    const system = action.system == null ? null : String(action.system).toLowerCase();
+    if (system && !['postgres', 'postgresql', 'database', 'db'].includes(system)) continue;
     if (action.disposition === 'retain' || action.disposition === 'review') continue;
     if (action.disposition != null && action.disposition !== 'erase') {
       throw new Error(`unsupported action disposition: ${action.disposition}`);

@@ -38,7 +38,7 @@ test('orchestrates all systems and certifies withheld actions', async () => {
   const calls = [];
   const interfaces = Object.fromEntries(['database', 'minio', 'billing'].map((name) => [name, async (input) => {
     calls.push([name, input]);
-    return { deleted: input.actions.length };
+    return { deleted: input.grouped_actions.length };
   }]));
   const result = await oublietteExecuteErasure({ caseId: 'success', planHash, approvedBy: 'human@example.test', interfaces });
   assert.deepEqual(calls.map(([name]) => name), ['database', 'minio', 'billing']);
@@ -46,6 +46,44 @@ test('orchestrates all systems and certifies withheld actions', async () => {
   assert.equal(result.certificate.plan_hash, planHash);
   assert.equal(result.certificate.manifest.length, 3);
   assert.deepEqual(result.certificate.manifest.map((item) => item.system), ['postgres', 'minio', 'billing']);
+});
+
+test('passes each destructive adapter its required execution envelope', async () => {
+  const { body, planHash } = approvedCase('adapter-envelope', [
+    { system: 'postgres', record_type: 'account', record_id: 12, disposition: 'erase' },
+    { system: 'minio', record_type: 'object', record_id: 'uploads/envelope', locator: 'uploads/envelope', disposition: 'erase' },
+    { system: 'billing', record_type: 'customer', record_id: 'cus_envelope', disposition: 'erase' },
+  ]);
+  const seen = {};
+  const result = await oublietteExecuteErasure({
+    caseId: 'adapter-envelope', planHash, approvedBy: 'human@example.test',
+    interfaces: {
+      database: async (input) => {
+        seen.database = input;
+        return { counts: { accounts: 1 } };
+      },
+      minio: async (input) => {
+        seen.minio = input;
+        return { results: [{ key: 'uploads/envelope', status: 'deleted' }] };
+      },
+      billing: async (input) => {
+        seen.billing = input;
+        return { ok: true, erased: ['cus_envelope'] };
+      },
+      postgresTransaction: async () => ({ manifest: [] }),
+      billingErase: async () => {},
+    },
+  });
+  assert.deepEqual(seen.database.actions, body.actions);
+  assert.equal(seen.database.grouped_actions.length, 1);
+  assert.deepEqual(seen.minio.plan, body);
+  assert.equal(seen.minio.planHash, planHash);
+  assert.equal(seen.minio.approval.plan_hash, planHash);
+  assert.equal(seen.minio.postgresPhase.success, true);
+  assert.equal(typeof seen.billing.postgresTransaction, 'function');
+  assert.equal(typeof seen.billing.billingErase, 'function');
+  assert.equal(seen.billing.caseId, 'adapter-envelope');
+  assert.equal(result.certificate.manifest.length, 3);
 });
 
 test('rejects explicit adapter failure results without certifying the plan', async () => {

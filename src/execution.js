@@ -218,7 +218,8 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
   const confirmedManifest = [];
   try {
     for (const name of ['database', 'minio', 'billing']) {
-      const execute = interfaces?.[name];
+      const adapter = interfaces?.[name];
+      const execute = typeof adapter === 'function' ? adapter : adapter?.execute;
       if (grouped[name].length && typeof execute !== 'function') throw new Error(`${name} execution interface is not configured`);
       const savedPhase = loadExecutionPhase(caseId, planHash, name);
       if (savedPhase) {
@@ -231,7 +232,11 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
         systems[name] = { ok: true, result: null, skipped: true };
         continue;
       }
-      const result = await execute({
+      const result = await execute.call(adapter, {
+        // The top-level envelope is the approved full plan. This is required by
+        // the PostgreSQL adapter and prevents an adapter from seeing a partial
+        // plan that was reconstructed from one system's action group.
+        ...initial.body,
         case_id: caseId,
         caseId,
         plan_hash: planHash,
@@ -240,8 +245,11 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
         approvedBy,
         plan: initial.body,
         approval: initial.approval,
-        actions: grouped[name],
+        grouped_actions: grouped[name],
         withheld,
+        client: interfaces.minioClient || interfaces.minio?.client,
+        postgresTransaction: interfaces.postgresTransaction || interfaces.billing?.postgresTransaction,
+        billingErase: interfaces.billingErase || interfaces.billing?.billingErase,
         postgresPhase: systems.database?.ok ? { success: true, result: systems.database.result } : null,
       });
       const confirmed = confirmedActions(name, grouped[name], result);

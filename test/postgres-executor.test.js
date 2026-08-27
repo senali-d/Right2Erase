@@ -42,6 +42,20 @@ test('deletes explicit records in leaf-to-root order and returns counts', async 
   assert.equal(pool.calls.at(-1), 'COMMIT');
 });
 
+test('accepts a full multi-system plan and executes only PostgreSQL actions', async () => {
+  const pool = fakePool();
+  const result = await createPostgresExecutor({ pool }).execute({
+    case_id: 'case-1',
+    actions: [
+      { system: 'postgres', record_type: 'account', record_id: 1 },
+      { system: 'minio', record_type: 'object', record_id: 'uploads/1', locator: 'uploads/1' },
+      { system: 'billing', record_type: 'customer', record_id: 'cus_1' },
+    ],
+  });
+  assert.deepEqual(result, { accounts: 1 });
+  assert.deepEqual(pool.calls.filter((call) => call.startsWith('DELETE')).map((call) => call.match(/DELETE FROM (\w+)/)[1]), ['accounts']);
+});
+
 test('rolls back the whole PostgreSQL operation on any failure', async () => {
   const pool = fakePool({ failOn: 'orders' });
   await assert.rejects(createPostgresExecutor({ pool }).execute(plan), /failure in orders/);
