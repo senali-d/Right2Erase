@@ -16,12 +16,26 @@ function parseResult(result) {
   try { return JSON.parse(text); } catch { return text; }
 }
 
+// A per-server override (MCP_AUTH_TOKEN_<NAME>) wins when servers are issued
+// distinct secrets; MCP_AUTH_TOKEN alone covers the common case of one shared
+// token for every server. Never logged, never placed in the connection URL.
+function tokenFor(name) {
+  return process.env[`MCP_AUTH_TOKEN_${name.toUpperCase()}`] || process.env.MCP_AUTH_TOKEN || undefined;
+}
+
 export async function createAgent({ approval = async () => false } = {}) {
   const clients = new Map();
-  for (const [name, url] of Object.entries(MCP_SERVERS)) {
-    const client = new Client({ name: 'trueforge-agent', version: '1.0.0' });
-    await client.connect(new StreamableHTTPClientTransport(new URL(url)));
-    clients.set(name, client);
+  try {
+    for (const [name, url] of Object.entries(MCP_SERVERS)) {
+      const client = new Client({ name: 'trueforge-agent', version: '1.0.0' });
+      clients.set(name, client);
+      const token = tokenFor(name);
+      const requestInit = token ? { headers: { authorization: `Bearer ${token}` } } : undefined;
+      await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit }));
+    }
+  } catch (error) {
+    await Promise.allSettled([...clients.values()].map((client) => client.close()));
+    throw error;
   }
 
   const callTool = async (name, args) => {
