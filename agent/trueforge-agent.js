@@ -57,6 +57,13 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       ? customers
       : (customers.results || customers.customers || customers.rows || []);
 
+    const rowsOf = (value) => (Array.isArray(value) ? value : (value?.rows || []));
+    const addRowFindings = (rows, record_type, disposition = 'erase') => Promise.all(
+      rows.map((row) => call('finding_add', {
+        case_id: caseId, system: 'postgres', record_type, record_id: row.id, metadata: { row }, disposition,
+      })),
+    );
+
     for (const account of accountRows) {
       const accountId = account.id || account.account_id;
       if (!accountId) continue;
@@ -66,13 +73,30 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
         call('db_list_support_tickets', { account_id: accountId }),
         call('db_search_uploads', { account_id: accountId }),
       ]);
-      const orderRows = orders.rows || orders;
+      const orderRows = rowsOf(orders);
       const orderIds = orderRows.map((order) => order.id).filter(Boolean);
-      const [refunds, logs] = await Promise.all([
+      const orderNumbers = orderRows.map((order) => order.order_number).filter(Boolean);
+      const [items, refunds, retainedRefunds, logs] = await Promise.all([
+        orderIds.length ? call('db_list_order_items', { order_ids: orderIds }) : [],
         orderIds.length ? call('db_list_refunds', { order_ids: orderIds }) : [],
+        orderNumbers.length ? call('db_list_retained_refunds', { order_numbers: orderNumbers }) : [],
         call('db_search_event_log', { emails: [subject_email], ip_address: account.last_seen_ip || undefined }),
       ]);
-      await call('finding_add', { case_id: caseId, system: 'postgres', record_type: 'account', record_id: accountId, metadata: { account, emails, orders, refunds, tickets, uploads, logs }, disposition: 'erase' });
+
+      // Every deletable row becomes its own finding so plan_create can turn it
+      // into an executable leaf-to-root action; retained refunds are recorded
+      // with a non-erase disposition so the executor withholds them instead.
+      await Promise.all([
+        addRowFindings(rowsOf(emails), 'account_email'),
+        addRowFindings(orderRows, 'order'),
+        addRowFindings(rowsOf(items), 'order_item'),
+        addRowFindings(rowsOf(refunds), 'refund'),
+        addRowFindings(rowsOf(retainedRefunds), 'retained_refund', 'retain'),
+        addRowFindings(rowsOf(tickets), 'support_ticket'),
+        addRowFindings(rowsOf(uploads), 'upload'),
+        addRowFindings(rowsOf(logs), 'event'),
+      ]);
+      await call('finding_add', { case_id: caseId, system: 'postgres', record_type: 'account', record_id: accountId, metadata: { account }, disposition: 'erase' });
     }
 
     for (const customer of customerRows) {
@@ -86,8 +110,16 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       await call('finding_add', { case_id: caseId, system: 'billing', record_type: 'customer', record_id: customerId, metadata: { customer, details, charges, preview }, disposition: 'erase' });
     }
 
-    const objects = await call('storage_search_objects', { query: subject_email });
-    await call('finding_add', { case_id: caseId, system: 'minio', record_type: 'object-search', record_id: subject_email, metadata: { objects }, disposition: 'erase' });
+    const search = await call('storage_search_objects', { query: subject_email });
+    if (search.truncated) {
+      // The search tool exposes no continuation cursor, so a truncated result
+      // is an incomplete view of the subject's objects; proceeding would plan
+      // an erasure that silently leaves matching objects behind.
+      throw new Error(`storage_search_objects truncated at ${search.limit} results; refusing to plan an incomplete object erasure for ${subject_email}`);
+    }
+    await Promise.all((search.objects || []).map((object) => call('finding_add', {
+      case_id: caseId, system: 'minio', record_type: 'object', record_id: object.key, locator: object.key, metadata: { object }, disposition: 'erase',
+    })));
     return { case_id: caseId, accounts, customers, case: caseRecord };
   }
 
