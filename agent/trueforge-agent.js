@@ -98,32 +98,42 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       for (const object of response.objects || []) minioObjects.set(object.key, object);
     };
 
+    // account_emails has no schema-level cap, so db_get_account_emails caps
+    // each response and hands back a cursor; loop pages until the server
+    // reports none remain instead of refusing accounts above the page size.
+    async function fetchAllAccountEmails(accountId) {
+      const rows = [];
+      let cursor;
+      for (;;) {
+        const response = await call('db_get_account_emails', { account_id: accountId, cursor });
+        rows.push(...rowsOf(response));
+        if (!response.truncated) return rows;
+        if (response.next_cursor == null) {
+          throw new Error(`db_get_account_emails (account ${accountId}) reported truncated with no next_cursor; cannot page further`);
+        }
+        cursor = response.next_cursor;
+      }
+    }
+
     for (const account of accountRows) {
       const accountId = account.id || account.account_id;
       if (!accountId) continue;
-      const [emails, orders, tickets, uploads, accountObjects] = await Promise.all([
-        call('db_get_account_emails', { account_id: accountId }),
+      const [emailRows, orders, tickets, uploads, accountObjects] = await Promise.all([
+        fetchAllAccountEmails(accountId),
         call('db_list_orders', { account_id: accountId }),
         call('db_list_support_tickets', { account_id: accountId }),
         call('db_search_uploads', { account_id: accountId }),
         call('storage_list_objects', { prefix: `uploads/acct_${accountId}/` }),
       ]);
       collectMinioObjects(`account ${accountId}`, accountObjects);
-      // db_get_account_emails has no cap of its own in the schema, so a
-      // truncated response means the historical-email chain (and therefore
-      // event-log coverage below) is incomplete; refuse to plan on it rather
-      // than silently searching only a prefix of the subject's addresses.
-      if (emails.truncated) {
-        throw new Error(`db_get_account_emails (account ${accountId}) truncated at ${emails.limit} results; refusing to plan an incomplete identity/event-log discovery for ${subject_email}`);
-      }
       const orderRows = rowsOf(orders);
       const orderIds = orderRows.map((order) => order.id).filter(Boolean);
       const orderNumbers = orderRows.map((order) => order.order_number).filter(Boolean);
-      // db_search_event_log accepts at most 100 emails per call, but
-      // db_get_account_emails has no such cap; partition every known address
-      // into batches so an account with a long historical-email chain doesn't
-      // silently lose event-log coverage past the first 100.
-      const knownEmails = [...new Set([subject_email, ...rowsOf(emails).map((row) => row.email)])]
+      // db_search_event_log accepts at most 100 emails per call; partition
+      // every known address (now fully paged in above) into batches so a
+      // long historical-email chain doesn't lose event-log coverage past the
+      // first 100.
+      const knownEmails = [...new Set([subject_email, ...emailRows.map((row) => row.email)])]
         .filter(Boolean);
       const emailBatches = [];
       for (let i = 0; i < knownEmails.length; i += 100) emailBatches.push(knownEmails.slice(i, i + 100));
@@ -156,7 +166,7 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       // into an executable leaf-to-root action; retained refunds are recorded
       // with a non-erase disposition so the executor withholds them instead.
       await Promise.all([
-        addRowFindings(rowsOf(emails), 'account_email'),
+        addRowFindings(emailRows, 'account_email'),
         addRowFindings(orderRows, 'order'),
         addRowFindings(rowsOf(items), 'order_item'),
         addRowFindings(rowsOf(refunds), 'refund'),

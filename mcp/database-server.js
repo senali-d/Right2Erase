@@ -53,10 +53,16 @@ function createServer() {
     );
     return result(rows);
   });
-  tool('db_get_account_emails', `List current and historical email addresses for an account. Truncates at ${maxAccountEmails} rows; check the truncated flag before batching these into further per-email queries.`, { account_id: z.coerce.number().int().positive() }, async ({ account_id }) => {
-    const { rows } = await pool.query('SELECT id, account_id, email, is_primary, valid_from, valid_until FROM account_emails WHERE account_id=$1 ORDER BY valid_from LIMIT $2', [account_id, maxAccountEmails + 1]);
+  tool('db_get_account_emails', `List current and historical email addresses for an account, one page of up to ${maxAccountEmails} rows at a time ordered by id. If truncated is true, call again with cursor set to next_cursor to fetch the next page; loop until truncated is false to see every address.`, {
+    account_id: z.coerce.number().int().positive(), cursor: z.coerce.number().int().nonnegative().optional(),
+  }, async ({ account_id, cursor }) => {
+    const { rows } = await pool.query(
+      'SELECT id, account_id, email, is_primary, valid_from, valid_until FROM account_emails WHERE account_id=$1 AND id > $2 ORDER BY id LIMIT $3',
+      [account_id, cursor ?? 0, maxAccountEmails + 1],
+    );
     const truncated = rows.length > maxAccountEmails;
-    return result({ rows: truncated ? rows.slice(0, maxAccountEmails) : rows, truncated, limit: maxAccountEmails });
+    const page = truncated ? rows.slice(0, maxAccountEmails) : rows;
+    return result({ rows: page, truncated, limit: maxAccountEmails, next_cursor: truncated ? page[page.length - 1].id : null });
   });
   tool('db_list_orders', 'List all orders belonging to one account.', { account_id: z.coerce.number().int().positive() }, async ({ account_id }) => {
     const { rows } = await pool.query('SELECT id, account_id, order_number, total_cents, status, ship_address, created_at FROM orders WHERE account_id=$1 ORDER BY id', [account_id]);

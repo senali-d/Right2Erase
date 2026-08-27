@@ -250,10 +250,35 @@ test('db_search_event_log batches run one at a time, never concurrently', async 
   assert.equal(maxInFlight, 1);
 });
 
-test('a truncated db_get_account_emails response refuses to plan an incomplete discovery', async () => {
+test('db_get_account_emails is paged with cursor until every historical address is fetched', async () => {
+  const allEmails = Array.from({ length: 231 }, (_, i) => ({ id: i + 1, email: `alias${i}@example.com` }));
+  const pageCalls = [];
+  const callTool = rowsResponder({
+    db_get_account_emails: async ({ account_id, cursor }) => {
+      pageCalls.push({ account_id, cursor });
+      const pageSize = 100;
+      const startIndex = cursor ? allEmails.findIndex((row) => row.id === cursor) + 1 : 0;
+      const page = allEmails.slice(startIndex, startIndex + pageSize);
+      const truncated = startIndex + pageSize < allEmails.length;
+      return { rows: page, truncated, limit: pageSize, next_cursor: truncated ? page[page.length - 1].id : null };
+    },
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+  await agent.prepare({ subject_email: 'subject@example.com' });
+
+  assert.equal(pageCalls.length, 3); // 231 rows over a 100-row page size -> 3 pages
+  assert.equal(pageCalls[0].cursor, undefined);
+  assert.equal(pageCalls[1].cursor, 100);
+  assert.equal(pageCalls[2].cursor, 200);
+});
+
+test('a truncated db_get_account_emails page with no next_cursor refuses to plan an incomplete discovery', async () => {
   const calls = [];
   const callTool = rowsResponder({
-    db_get_account_emails: async () => ({ rows: [], truncated: true, limit: 500 }),
+    // A well-behaved server always pairs truncated:true with a next_cursor;
+    // this simulates a broken one to exercise the pagination safety net.
+    db_get_account_emails: async () => ({ rows: [], truncated: true, limit: 500, next_cursor: null }),
     db_search_event_log: async () => { calls.push('db_search_event_log'); return { rows: [] }; },
     case_complete_discovery: async () => { calls.push('case_complete_discovery'); return { ok: true }; },
   });
@@ -262,7 +287,7 @@ test('a truncated db_get_account_emails response refuses to plan an incomplete d
 
   await assert.rejects(
     agent.prepare({ subject_email: 'subject@example.com' }),
-    /db_get_account_emails.*truncated/,
+    /db_get_account_emails.*truncated.*next_cursor/,
   );
   assert.deepEqual(calls, []);
 });
