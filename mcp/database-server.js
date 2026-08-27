@@ -14,6 +14,16 @@ const result = (rows) => ({ content: [{ type: 'text', text: JSON.stringify(rows,
 const ids = z.array(z.coerce.number().int().positive()).min(1).max(500);
 const escapeLike = (value) => value.replace(/[\\%_]/g, '\\$&');
 
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+// account_emails has no schema-level cap on historical addresses per account,
+// unlike db_search_event_log's 100-email input limit. Without a query-side
+// bound here, a caller partitioning the full list into event-log batches has
+// no upper limit on how many batches it ends up issuing.
+const maxAccountEmails = positiveInteger(process.env.MCP_DB_MAX_ACCOUNT_EMAILS || process.env.MCP_MAX_RESULTS, 500);
+
 function createServer() {
   const server = new McpServer({ name: 'shopkart-db', version: '1.0.0' });
   const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -43,9 +53,10 @@ function createServer() {
     );
     return result(rows);
   });
-  tool('db_get_account_emails', 'List current and historical email addresses for an account.', { account_id: z.coerce.number().int().positive() }, async ({ account_id }) => {
-    const { rows } = await pool.query('SELECT id, account_id, email, is_primary, valid_from, valid_until FROM account_emails WHERE account_id=$1 ORDER BY valid_from', [account_id]);
-    return result(rows);
+  tool('db_get_account_emails', `List current and historical email addresses for an account. Truncates at ${maxAccountEmails} rows; check the truncated flag before batching these into further per-email queries.`, { account_id: z.coerce.number().int().positive() }, async ({ account_id }) => {
+    const { rows } = await pool.query('SELECT id, account_id, email, is_primary, valid_from, valid_until FROM account_emails WHERE account_id=$1 ORDER BY valid_from LIMIT $2', [account_id, maxAccountEmails + 1]);
+    const truncated = rows.length > maxAccountEmails;
+    return result({ rows: truncated ? rows.slice(0, maxAccountEmails) : rows, truncated, limit: maxAccountEmails });
   });
   tool('db_list_orders', 'List all orders belonging to one account.', { account_id: z.coerce.number().int().positive() }, async ({ account_id }) => {
     const { rows } = await pool.query('SELECT id, account_id, order_number, total_cents, status, ship_address, created_at FROM orders WHERE account_id=$1 ORDER BY id', [account_id]);

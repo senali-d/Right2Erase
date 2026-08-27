@@ -22,8 +22,8 @@ export const DISCOVERY_TOOLS = new Set([
 ]);
 
 export const OUBLIETTE_TOOLS = new Set([
-  'case_create', 'case_get', 'case_list', 'finding_add', 'plan_create',
-  'plan_approve', 'oubliette_execute_erasure',
+  'case_create', 'case_get', 'case_list', 'finding_add', 'case_complete_discovery',
+  'plan_create', 'plan_approve', 'oubliette_execute_erasure',
 ]);
 
 export const APPROVAL_REQUIRED_TOOLS = new Set(['oubliette_execute_erasure']);
@@ -43,10 +43,11 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
   };
 
   async function openAndInvestigate({ subject_email, subject_name }) {
-    const caseRecord = await call('case_create', { subject_email, subject_name });
-    const caseId = caseRecord.case_id || caseRecord.id;
-    if (!caseId) throw new Error('case_create did not return a case id');
-
+    // Resolve identity before persisting anything: case_create has no way to
+    // be undone (Oubliette keeps every case as a durable audit record), so an
+    // identity collision must be caught while it is still just an in-memory
+    // API response, not after it has already produced an orphaned case with
+    // zero findings that nothing ever cleans up.
     const accounts = await call('db_find_accounts', { email: subject_email });
     const customers = await call('billing_find_customer', { email: subject_email });
     const accountRows = Array.isArray(accounts) ? accounts : (accounts.rows || []);
@@ -74,6 +75,10 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
         `ambiguous identity for ${subject_email}: matches ${distinctAccountIds.size} distinct accounts [${describe}]; resolve the collision manually before opening a case`,
       );
     }
+
+    const caseRecord = await call('case_create', { subject_email, subject_name });
+    const caseId = caseRecord.case_id || caseRecord.id;
+    if (!caseId) throw new Error('case_create did not return a case id');
 
     const rowsOf = (value) => (Array.isArray(value) ? value : (value?.rows || []));
     const addRowFindings = (rows, record_type, disposition = 'erase') => Promise.all(
@@ -104,6 +109,13 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
         call('storage_list_objects', { prefix: `uploads/acct_${accountId}/` }),
       ]);
       collectMinioObjects(`account ${accountId}`, accountObjects);
+      // db_get_account_emails has no cap of its own in the schema, so a
+      // truncated response means the historical-email chain (and therefore
+      // event-log coverage below) is incomplete; refuse to plan on it rather
+      // than silently searching only a prefix of the subject's addresses.
+      if (emails.truncated) {
+        throw new Error(`db_get_account_emails (account ${accountId}) truncated at ${emails.limit} results; refusing to plan an incomplete identity/event-log discovery for ${subject_email}`);
+      }
       const orderRows = rowsOf(orders);
       const orderIds = orderRows.map((order) => order.id).filter(Boolean);
       const orderNumbers = orderRows.map((order) => order.order_number).filter(Boolean);
@@ -117,21 +129,26 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       for (let i = 0; i < knownEmails.length; i += 100) emailBatches.push(knownEmails.slice(i, i + 100));
       if (emailBatches.length === 0) emailBatches.push([]);
 
-      const [items, refunds, retainedRefunds, ...logBatches] = await Promise.all([
+      const [items, refunds, retainedRefunds] = await Promise.all([
         orderIds.length ? call('db_list_order_items', { order_ids: orderIds }) : [],
         orderIds.length ? call('db_list_refunds', { order_ids: orderIds }) : [],
         orderNumbers.length ? call('db_list_retained_refunds', { order_numbers: orderNumbers }) : [],
-        // The IP condition is OR'd server-side, so passing it on every batch
-        // would return the same IP-matched rows in each response; scope it to
-        // the first batch and dedupe the merged rows defensively below.
-        ...emailBatches.map((batch, index) => call('db_search_event_log', {
+      ]);
+
+      // Batches run one at a time rather than via Promise.all: the database
+      // tool caps each call at 100 emails, but nothing caps how many batches
+      // that produces, so firing them all concurrently would fan out an
+      // unbounded number of simultaneous queries against a shared, small
+      // connection pool. The IP condition is OR'd server-side, so passing it
+      // on every batch would return the same IP-matched rows in each
+      // response; scope it to the first batch and dedupe below regardless.
+      const eventRows = new Map();
+      for (const [index, batch] of emailBatches.entries()) {
+        const response = await call('db_search_event_log', {
           emails: batch,
           ip_address: index === 0 ? (account.last_seen_ip || undefined) : undefined,
-        })),
-      ]);
-      const eventRows = new Map();
-      for (const batch of logBatches) {
-        for (const row of rowsOf(batch)) eventRows.set(row.id, row);
+        });
+        for (const row of rowsOf(response)) eventRows.set(row.id, row);
       }
       const logs = [...eventRows.values()];
 
@@ -171,6 +188,12 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
     await Promise.all([...minioObjects.values()].map((object) => call('finding_add', {
       case_id: caseId, system: 'minio', record_type: 'object', record_id: object.key, locator: object.key, metadata: { object }, disposition: 'erase',
     })));
+
+    // Only signal discovery as complete once every finding above - postgres,
+    // billing, and MinIO - has actually been recorded. If any discovery call
+    // throws (e.g. a truncated storage query), this is never reached and
+    // plan_create permanently refuses to build a plan from the partial case.
+    await call('case_complete_discovery', { case_id: caseId });
     return { case_id: caseId, accounts, customers, case: caseRecord };
   }
 

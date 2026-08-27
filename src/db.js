@@ -114,6 +114,7 @@ const addColumn = (table, definition) => {
   return true;
 };
 addColumn('cases', 'revision INTEGER NOT NULL DEFAULT 0');
+addColumn('cases', 'discovery_completed_at TEXT');
 const plansMigrated = addColumn('plans', 'case_revision INTEGER NOT NULL DEFAULT 0');
 const approvalsMigrated = addColumn('approvals', 'case_revision INTEGER NOT NULL DEFAULT -1');
 const executionApprovalsMigrated = addColumn('execution_runs', 'approval_id INTEGER REFERENCES approvals(id)');
@@ -183,11 +184,28 @@ export function addFinding(caseId, finding) {
     db.prepare(`INSERT INTO findings (case_id, system, record_type, record_id, locator, metadata, disposition, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(caseId, finding.system, finding.record_type, String(finding.record_id), finding.locator ?? null,
         JSON.stringify(finding.metadata ?? {}), finding.disposition ?? 'erase', timestamp);
-    // A finding change creates a new case revision and invalidates prior plans.
-    db.prepare("UPDATE cases SET revision = revision + 1, status = 'discovered', updated_at = ? WHERE id = ?").run(timestamp, caseId);
+    // A finding change creates a new case revision, invalidates prior plans,
+    // and undoes any prior discovery-complete mark since it is no longer
+    // accurate for the case's current findings.
+    db.prepare("UPDATE cases SET revision = revision + 1, status = 'discovered', discovery_completed_at = NULL, updated_at = ? WHERE id = ?").run(timestamp, caseId);
   });
   transaction();
   return getCase(caseId).findings.at(-1);
+}
+
+// Discovery is a multi-step, fallible process (each MCP call can throw, e.g.
+// on a truncated storage query) run entirely by the caller outside a
+// transaction. plan_create must not trust a case's findings are complete just
+// because some were successfully recorded, so completion is an explicit,
+// separate signal the caller sends only after every discovery step succeeds.
+export function completeDiscovery(caseId) {
+  const timestamp = now();
+  const transaction = db.transaction(() => {
+    mutableCase(caseId);
+    db.prepare('UPDATE cases SET discovery_completed_at = ?, updated_at = ? WHERE id = ?').run(timestamp, timestamp, caseId);
+  });
+  transaction();
+  return getCase(caseId);
 }
 
 export function savePlan(caseId, body, planHash, expectedRevision) {

@@ -55,6 +55,7 @@ function rowsResponder(overrides = {}) {
     db_search_event_log: async () => empty,
     storage_search_objects: async () => emptyObjects,
     finding_add: async () => ({ ok: true }),
+    case_complete_discovery: async () => ({ ok: true }),
     plan_create: async () => ({ plan_hash: 'a'.repeat(64) }),
     ...overrides,
   };
@@ -96,9 +97,11 @@ test('MinIO discovery searches the account prefix and dedupes against the email 
   ]);
 });
 
-test('multiple distinct accounts matching subject_email are rejected as an identity collision', async () => {
+test('multiple distinct accounts matching subject_email are rejected before a case is ever created', async () => {
   const findings = [];
+  const calls = [];
   const callTool = rowsResponder({
+    case_create: async () => { calls.push('case_create'); return { case_id: 'case-1' }; },
     db_find_accounts: async () => ({
       rows: [
         { id: 'acct_1', matched_via: 'historical_email' },
@@ -118,6 +121,25 @@ test('multiple distinct accounts matching subject_email are rejected as an ident
     /ambiguous identity/,
   );
   assert.deepEqual(findings, []);
+  // No case must ever be persisted for an identity collision - otherwise it
+  // is left orphaned with no findings and no way to clean it up.
+  assert.ok(!calls.includes('case_create'));
+});
+
+test('identity is resolved via db_find_accounts and billing_find_customer before a case is created', async () => {
+  const calls = [];
+  const callTool = rowsResponder({
+    db_find_accounts: async () => { calls.push('db_find_accounts'); return { rows: [{ id: 'acct_1' }] }; },
+    billing_find_customer: async () => { calls.push('billing_find_customer'); return { results: [] }; },
+    case_create: async () => { calls.push('case_create'); return { case_id: 'case-1' }; },
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+  await agent.prepare({ subject_email: 'subject@example.com' });
+
+  const caseCreateIndex = calls.indexOf('case_create');
+  assert.ok(caseCreateIndex > calls.indexOf('db_find_accounts'));
+  assert.ok(caseCreateIndex > calls.indexOf('billing_find_customer'));
 });
 
 test('a truncated MinIO query refuses to plan an incomplete erasure', async () => {
@@ -130,6 +152,42 @@ test('a truncated MinIO query refuses to plan an incomplete erasure', async () =
     agent.prepare({ subject_email: 'subject@example.com' }),
     /truncated/,
   );
+});
+
+test('discovery is marked complete only after every finding is recorded, before plan_create', async () => {
+  const calls = [];
+  const callTool = rowsResponder({
+    finding_add: async () => { calls.push('finding_add'); return { ok: true }; },
+    case_complete_discovery: async () => { calls.push('case_complete_discovery'); return { ok: true }; },
+    plan_create: async () => { calls.push('plan_create'); return { plan_hash: 'a'.repeat(64) }; },
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+  await agent.prepare({ subject_email: 'subject@example.com' });
+
+  const completeIndex = calls.indexOf('case_complete_discovery');
+  assert.notEqual(completeIndex, -1);
+  assert.ok(calls.slice(0, completeIndex).every((call) => call === 'finding_add'));
+  assert.deepEqual(calls.slice(completeIndex), ['case_complete_discovery', 'plan_create']);
+});
+
+test('a truncated storage query prevents discovery from ever being marked complete', async () => {
+  const calls = [];
+  const callTool = rowsResponder({
+    finding_add: async () => { calls.push('finding_add'); return { ok: true }; },
+    case_complete_discovery: async () => { calls.push('case_complete_discovery'); return { ok: true }; },
+    plan_create: async () => { calls.push('plan_create'); return { plan_hash: 'a'.repeat(64) }; },
+    // Postgres and billing findings are recorded before this final email
+    // search runs, so this simulates the exact partial-persistence scenario.
+    storage_search_objects: async () => ({ objects: [], truncated: true, limit: 1000 }),
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+  await assert.rejects(agent.prepare({ subject_email: 'subject@example.com' }), /truncated/);
+
+  assert.ok(calls.includes('finding_add'));
+  assert.ok(!calls.includes('case_complete_discovery'));
+  assert.ok(!calls.includes('plan_create'));
 });
 
 test('historical emails beyond 100 are batched into multiple db_search_event_log calls', async () => {
@@ -165,4 +223,46 @@ test('historical emails beyond 100 are batched into multiple db_search_event_log
   const eventFindings = findings.filter((f) => f.record_type === 'event');
   const eventIds = eventFindings.map((f) => f.record_id).sort();
   assert.deepEqual(eventIds, ['shared-ip-row', 'unique-1', 'unique-2']);
+});
+
+test('db_search_event_log batches run one at a time, never concurrently', async () => {
+  const historicalEmails = Array.from({ length: 350 }, (_, i) => `alias${i}@example.com`);
+  let inFlight = 0;
+  let maxInFlight = 0;
+  let callCount = 0;
+  const callTool = rowsResponder({
+    db_get_account_emails: async () => ({ rows: historicalEmails.map((email, i) => ({ id: i, email })) }),
+    db_search_event_log: async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      callCount += 1;
+      // Yield so a buggy Promise.all-based implementation would overlap calls.
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      inFlight -= 1;
+      return { rows: [] };
+    },
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+  await agent.prepare({ subject_email: 'subject@example.com' });
+
+  assert.equal(callCount, 4); // 351 known emails (350 historical + subject_email) -> 4 batches of <=100
+  assert.equal(maxInFlight, 1);
+});
+
+test('a truncated db_get_account_emails response refuses to plan an incomplete discovery', async () => {
+  const calls = [];
+  const callTool = rowsResponder({
+    db_get_account_emails: async () => ({ rows: [], truncated: true, limit: 500 }),
+    db_search_event_log: async () => { calls.push('db_search_event_log'); return { rows: [] }; },
+    case_complete_discovery: async () => { calls.push('case_complete_discovery'); return { ok: true }; },
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+
+  await assert.rejects(
+    agent.prepare({ subject_email: 'subject@example.com' }),
+    /db_get_account_emails.*truncated/,
+  );
+  assert.deepEqual(calls, []);
 });
