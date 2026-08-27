@@ -41,25 +41,39 @@ async function eraseBillingCustomer({ customerId, caseId, planHash }) {
 
 /** Build the production adapters used by the destructive MCP tool. */
 export function createRealExecutionInterfaces({
-  postgresExecutor = createPostgresExecutor(),
-  minioClient = new Minio.Client({
-    endPoint: process.env.MINIO_HOST || 'localhost',
-    port: Number(process.env.MINIO_PORT || 9000),
-    useSSL: process.env.MINIO_USE_SSL === 'true',
-    accessKey: process.env.MINIO_ACCESS_KEY || 'shopkart',
-    secretKey: process.env.MINIO_SECRET_KEY || 'shopkart123',
-  }),
+  postgresExecutor,
+  minioClient,
   billingErase = eraseBillingCustomer,
   bucket = process.env.MINIO_BUCKET || 'shopkart-uploads',
 } = {}) {
+  // Do not construct or validate destructive connectors until their phase is
+  // actually requested. Case-management tools can safely use the default
+  // interface set in production without touching sandbox configuration.
+  const getPostgresExecutor = () => {
+    if (postgresExecutor === undefined) postgresExecutor = createPostgresExecutor();
+    return postgresExecutor;
+  };
+  const getMinioClient = () => {
+    if (minioClient === undefined) {
+      minioClient = new Minio.Client({
+        endPoint: process.env.MINIO_HOST || 'localhost',
+        port: Number(process.env.MINIO_PORT || 9000),
+        useSSL: process.env.MINIO_USE_SSL === 'true',
+        accessKey: process.env.MINIO_ACCESS_KEY || 'shopkart',
+        secretKey: process.env.MINIO_SECRET_KEY || 'shopkart123',
+      });
+    }
+    return minioClient;
+  };
+
   return Object.freeze({
-    database: ({ plan, case_id, actions, withheld }) => postgresExecutor.execute({
+    database: ({ plan, case_id, actions, withheld }) => getPostgresExecutor().execute({
       ...(plan || { case_id, actions }),
       withhold: withheld,
     }),
     minio: ({ plan, planHash, plan_hash, approval, postgresPhase, withheld }) => executeSandboxMinioDeletion({
       plan, planHash: planHash || plan_hash, approval, postgresPhase,
-      client: minioClient, bucket, withheld,
+      client: getMinioClient(), bucket, withheld,
     }),
     billing: async ({ plan, caseId, case_id, planHash, plan_hash, approvedBy, approved_by, approval, postgresPhase }) => {
       const result = await executeBillingCleanup({

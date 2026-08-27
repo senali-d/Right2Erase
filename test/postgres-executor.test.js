@@ -30,6 +30,17 @@ const plan = {
   ],
 };
 
+test('production still rejects construction of the sandbox executor', () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    assert.throws(() => createPostgresExecutor(), /PostgreSQL deletion executor is sandbox-only/);
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
+});
+
 test('deletes explicit records in leaf-to-root order and returns counts', async () => {
   const pool = fakePool();
   const result = await createPostgresExecutor({ pool }).execute(plan);
