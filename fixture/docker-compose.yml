@@ -28,7 +28,9 @@ services:
       retries: 20
 
   billing-api:
-    build: ./billing-api
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       PORT: 4010
     ports: ["4010:4010"]
