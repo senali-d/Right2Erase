@@ -49,8 +49,13 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
 
     const accounts = await call('db_find_accounts', { email: subject_email });
     const customers = await call('billing_find_customer', { email: subject_email });
-    const accountRows = accounts.rows || accounts;
-    const customerRows = customers.customers || customers.rows || customers;
+    const accountRows = Array.isArray(accounts) ? accounts : (accounts.rows || []);
+    // The billing adapter mirrors the API response as { results: [...] }.
+    // Accept the other common MCP wrapper shapes as well, but never iterate
+    // the wrapper object itself.
+    const customerRows = Array.isArray(customers)
+      ? customers
+      : (customers.results || customers.customers || customers.rows || []);
 
     for (const account of accountRows) {
       const accountId = account.id || account.account_id;

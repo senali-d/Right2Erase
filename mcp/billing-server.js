@@ -99,6 +99,9 @@ if (process.env.MCP_TRANSPORT === 'http') {
   }
 
   const app = express();
+  // Keep the HTTP limit aligned with the shared MCP transport. Tool payloads
+  // may include discovery metadata when passed between adapters.
+  const jsonLimit = process.env.MCP_JSON_LIMIT || '5mb';
   const transports = new Map();
   const sessionTimers = new Map();
   const pendingInitializationTransports = new Set();
@@ -181,7 +184,7 @@ if (process.env.MCP_TRANSPORT === 'http') {
     }
     next();
   });
-  app.use(express.json());
+  app.use(express.json({ limit: jsonLimit }));
 
   app.post('/mcp', async (req, res) => {
     const requestedSession = req.headers['mcp-session-id'];

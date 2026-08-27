@@ -13,6 +13,10 @@ export function startHttpMcp(createServer, {
   host = process.env.MCP_HOST || '127.0.0.1',
 } = {}) {
   const app = express();
+  // A finding can contain the complete discovery result (orders, tickets,
+  // uploads, and audit records). Express defaults to 100kb, which rejects
+  // legitimate MCP tool calls before the transport can handle them.
+  const jsonLimit = process.env.MCP_JSON_LIMIT || '5mb';
   const sessions = new Map();
   const sessionTimers = new Map();
   const pendingInitializationTransports = new Set();
@@ -38,7 +42,7 @@ export function startHttpMcp(createServer, {
     if (shuttingDown) return res.status(503).json({ error: 'MCP server is shutting down' });
     return next();
   });
-  app.use(express.json());
+  app.use(express.json({ limit: jsonLimit }));
 
   function refreshSession(id, transport) {
     if (activeRequests.has(transport)) return;
