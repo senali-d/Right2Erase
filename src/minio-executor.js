@@ -1,4 +1,20 @@
+import * as Minio from 'minio';
 import { hashPlan } from './plan.js';
+import { normalizeSystem } from './system.js';
+
+const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+
+export function createSandboxMinioClient({
+  endPoint = process.env.MINIO_HOST || 'localhost',
+  port = Number(process.env.MINIO_PORT || 9000),
+  useSSL = process.env.MINIO_USE_SSL === 'true',
+  accessKey = process.env.MINIO_ACCESS_KEY || 'shopkart',
+  secretKey = process.env.MINIO_SECRET_KEY || 'shopkart123',
+} = {}) {
+  if (process.env.NODE_ENV === 'production') throw new Error('MinIO deletion client is sandbox-only');
+  if (!LOCAL_HOSTS.has(endPoint)) throw new Error('refusing non-local MinIO target');
+  return new Minio.Client({ endPoint, port, useSSL, accessKey, secretKey });
+}
 
 /**
  * The only destructive MinIO operation in the application.
@@ -73,7 +89,8 @@ function validateExecution({ plan, planHash, approval, postgresPhase, client, bu
 
 function objectActions(plan) {
   const seen = new Set();
-  return plan.actions.filter((action) => action?.system === 'minio' && action.disposition === 'erase').map((action) => {
+  return plan.actions.filter((action) => normalizeSystem(action?.system) === 'minio'
+    && action.disposition === 'erase').map((action) => {
     const key = objectKey(action.locator);
     if (!key) throw new Error('MinIO erase action must explicitly name an object key');
     if (seen.has(key)) throw new Error(`duplicate MinIO object in plan: ${key}`);
