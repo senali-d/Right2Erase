@@ -6,12 +6,17 @@
  * not connect to ShopKart and exposes no source-system delete operation.
  */
 import { randomUUID } from 'node:crypto';
+import { pathToFileURL } from 'node:url';
+import * as Minio from 'minio';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { startHttpMcp } from '../mcp/http-transport.js';
 import { addFinding, close, createCase, getCase, listCases, recordApproval, savePlan } from './db.js';
+import { executeBillingCleanup } from './billing-executor.js';
 import { oublietteExecuteErasure } from './execution.js';
+import { executeSandboxMinioDeletion } from './minio-executor.js';
+import { createPostgresExecutor } from './postgres-executor.js';
 import { buildPlan, hashPlan } from './plan.js';
 
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
@@ -22,7 +27,60 @@ const finding = {
   metadata: z.record(z.any()).optional(), disposition: z.enum(['erase', 'retain', 'review']).optional(),
 };
 
-function createServer() {
+async function eraseBillingCustomer({ customerId, caseId, planHash }) {
+  const base = process.env.BILLING_URL || 'http://localhost:4010';
+  const response = await fetch(`${base}/customers/${encodeURIComponent(customerId)}/erase`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ dry_run: false, case_id: caseId, plan_hash: planHash }),
+  });
+  const body = await response.text();
+  if (!response.ok) throw new Error(`billing-api ${response.status}: ${body}`);
+  try { return JSON.parse(body); } catch { return body; }
+}
+
+/** Build the production adapters used by the destructive MCP tool. */
+export function createRealExecutionInterfaces({
+  postgresExecutor = createPostgresExecutor(),
+  minioClient = new Minio.Client({
+    endPoint: process.env.MINIO_HOST || 'localhost',
+    port: Number(process.env.MINIO_PORT || 9000),
+    useSSL: process.env.MINIO_USE_SSL === 'true',
+    accessKey: process.env.MINIO_ACCESS_KEY || 'shopkart',
+    secretKey: process.env.MINIO_SECRET_KEY || 'shopkart123',
+  }),
+  billingErase = eraseBillingCustomer,
+  bucket = process.env.MINIO_BUCKET || 'shopkart-uploads',
+} = {}) {
+  return Object.freeze({
+    database: ({ plan, case_id, actions, withheld }) => postgresExecutor.execute({
+      ...(plan || { case_id, actions }),
+      withhold: withheld,
+    }),
+    minio: ({ plan, planHash, plan_hash, approval, postgresPhase, withheld }) => executeSandboxMinioDeletion({
+      plan, planHash: planHash || plan_hash, approval, postgresPhase,
+      client: minioClient, bucket, withheld,
+    }),
+    billing: async ({ plan, caseId, case_id, planHash, plan_hash, approvedBy, approved_by, approval, postgresPhase }) => {
+      const result = await executeBillingCleanup({
+        caseId: caseId || case_id,
+        planHash: planHash || plan_hash,
+        approvedBy: approvedBy || approved_by,
+        loadContext: () => ({ plan, approval }),
+        // PostgreSQL is committed by the database phase before this adapter is
+        // reached. This callback records that fact without repeating deletes.
+        postgresTransaction: async () => ({ manifest: postgresPhase?.result?.manifest || [] }),
+        billingErase,
+      });
+      if (!result.ok) throw new Error(result.error || 'billing execution failed');
+      return result;
+    },
+  });
+}
+
+const defaultExecutionInterfaces = createRealExecutionInterfaces();
+
+export function createServer({ interfaces = defaultExecutionInterfaces } = {}) {
   const server = new McpServer({ name: 'oubliette', version: '1.0.0' });
   const write = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
   const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
@@ -75,17 +133,19 @@ function createServer() {
       approved_by: z.string().min(1).max(200),
     }, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, async ({ case_id, plan_hash, approved_by }) => text(await oublietteExecuteErasure({
-    caseId: case_id, planHash: plan_hash, approvedBy: approved_by,
+    caseId: case_id, planHash: plan_hash, approvedBy: approved_by, interfaces,
   })));
 
   return server;
 }
 
-if (process.env.MCP_TRANSPORT === 'http') {
-  startHttpMcp(createServer, { name: 'oubliette', port: Number(process.env.OUBLIETTE_MCP_PORT || process.env.MCP_PORT || 4014) });
-} else {
-  await createServer().connect(new StdioServerTransport());
-}
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  if (process.env.MCP_TRANSPORT === 'http') {
+    startHttpMcp(createServer, { name: 'oubliette', port: Number(process.env.OUBLIETTE_MCP_PORT || process.env.MCP_PORT || 4014) });
+  } else {
+    await createServer().connect(new StdioServerTransport());
+  }
 
-process.once('SIGINT', close);
-process.once('SIGTERM', close);
+  process.once('SIGINT', close);
+  process.once('SIGTERM', close);
+}

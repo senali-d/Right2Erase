@@ -134,7 +134,7 @@ function readExecutionState(caseId, planHash, approvedBy) {
     if (!['erase', 'retain', 'review'].includes(disposition)) throw new Error('canonical plan contains an invalid disposition');
     return { ...action, disposition, target };
   });
-  return { subject, plan, body, actions };
+  return { subject, plan, body, actions, approval };
 }
 
 // This writer is intentionally module-private. The MCP layer and callers of
@@ -231,7 +231,19 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
         systems[name] = { ok: true, result: null, skipped: true };
         continue;
       }
-      const result = await execute({ case_id: caseId, plan_hash: planHash, actions: grouped[name] });
+      const result = await execute({
+        case_id: caseId,
+        caseId,
+        plan_hash: planHash,
+        planHash,
+        approved_by: approvedBy,
+        approvedBy,
+        plan: initial.body,
+        approval: initial.approval,
+        actions: grouped[name],
+        withheld,
+        postgresPhase: systems.database?.ok ? { success: true, result: systems.database.result } : null,
+      });
       const confirmed = confirmedActions(name, grouped[name], result);
       saveExecutionPhase(caseId, planHash, name, result, confirmed);
       confirmedManifest.push(...confirmed);
