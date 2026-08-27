@@ -2,6 +2,7 @@ import { db, hydrate, now } from './db.js';
 import { hashPlan, validateDeletionPlan } from './plan.js';
 import { validatePlanIntegrity } from './erasure.js';
 import { normalizeSystem } from './system.js';
+import { normalizePostgresRecordType } from './postgres-executor.js';
 
 /**
  * Stable boundary for destructive system adapters. Adapters must make one call
@@ -16,15 +17,6 @@ export const executionInterfaces = Object.freeze({
 });
 
 const systemFor = normalizeSystem;
-
-const databaseTableFor = new Map([
-  ['order_item', 'order_items'], ['order_items', 'order_items'],
-  ['refund', 'refunds'], ['refunds', 'refunds'], ['order', 'orders'], ['orders', 'orders'],
-  ['support_ticket', 'support_tickets'], ['support_tickets', 'support_tickets'],
-  ['upload', 'uploads'], ['uploads', 'uploads'], ['account_email', 'account_emails'],
-  ['account_emails', 'account_emails'], ['event', 'event_log'], ['event_log', 'event_log'],
-  ['account', 'accounts'], ['accounts', 'accounts'],
-]);
 
 function objectKey(value) {
   if (typeof value === 'string') return value;
@@ -49,7 +41,7 @@ function confirmedActions(system, actions, result) {
     const counts = result.counts || result;
     const expected = new Map();
     for (const action of actions) {
-      const table = databaseTableFor.get(action.record_type);
+      const table = normalizePostgresRecordType(action.record_type);
       if (!table) throw new Error(`database execution returned an unsupported record type: ${action.record_type}`);
       expected.set(table, (expected.get(table) || 0) + 1);
     }
