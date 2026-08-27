@@ -82,7 +82,7 @@ export const now = () => new Date().toISOString();
 const parse = (value) => {
   try { return JSON.parse(value); } catch { return value; }
 };
-const hydrate = (row) => row && Object.fromEntries(Object.entries(row).map(([k, v]) =>
+export const hydrate = (row) => row && Object.fromEntries(Object.entries(row).map(([k, v]) =>
   ['metadata', 'body', 'manifest', 'withheld'].includes(k) ? [k, parse(v)] : [k, v]));
 
 export function getCase(caseId) {

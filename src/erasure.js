@@ -1,4 +1,4 @@
-import { db, now } from './db.js';
+import { db, hydrate, now } from './db.js';
 
 export function executeCertificate({ caseId, planHash, approvedBy, manifest = [], withheld = [] }) {
   const timestamp = now();
@@ -27,5 +27,5 @@ export function executeCertificate({ caseId, planHash, approvedBy, manifest = []
     db.prepare("UPDATE cases SET status = 'completed', updated_at = ? WHERE id = ?").run(timestamp, caseId);
   });
   transaction();
-  return db.prepare('SELECT * FROM certificates WHERE case_id = ?').get(caseId);
+  return hydrate(db.prepare('SELECT * FROM certificates WHERE case_id = ?').get(caseId));
 }
