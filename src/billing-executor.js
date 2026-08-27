@@ -15,11 +15,11 @@ function readJson(value) {
   try { return JSON.parse(value); } catch { return null; }
 }
 
-function contextFromDatabaseWith(db, caseId, planHash, approvedBy) {
+async function contextFromDatabaseWith(db, caseId, planHash, approvedBy) {
+  const { validatePlanIntegrity } = await import('./erasure.js');
   const subject = db.prepare('SELECT id, revision, status FROM cases WHERE id = ?').get(caseId);
   if (!subject) throw new Error(`case not found: ${caseId}`);
-  const plan = db.prepare('SELECT * FROM plans WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash);
-  if (!plan) throw new Error('plan hash does not match a stored plan for this case');
+  const plan = validatePlanIntegrity({ caseId, planHash, database: db });
   const latest = db.prepare('SELECT * FROM plans WHERE case_id = ? ORDER BY version DESC LIMIT 1').get(caseId);
   if (!latest || latest.id !== plan.id || plan.case_revision !== subject.revision) {
     throw new Error('plan is stale; create and approve a new plan for the current case revision');

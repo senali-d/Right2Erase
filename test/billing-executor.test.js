@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { executeBillingCleanup } from '../src/billing-executor.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'oubliette-billing-'));
+process.env.OUBLIETTE_DB_PATH = path.join(directory, 'case.db');
+const { createCase, addFinding, close, db, recordApproval, savePlan } = await import('../src/db.js');
+const { hashPlan } = await import('../src/plan.js');
+const { executeBillingCleanup } = await import('../src/billing-executor.js');
 
 const plan = (actions) => ({ actions });
 const options = (actions, overrides = {}) => ({
@@ -11,7 +19,32 @@ const options = (actions, overrides = {}) => ({
   ...overrides,
 });
 
- test('rejects an unapproved hash before either executor is called', async () => {
+test('rejects a stored plan whose body no longer matches the approved hash', async () => {
+  const caseId = 'stored-body-tampered';
+  createCase({ id: caseId, subject_email: 'subject@example.test' });
+  addFinding(caseId, { system: 'billing', record_type: 'customer', record_id: 'cus_tampered' });
+  const body = {
+    case_id: caseId,
+    actions: [{ system: 'billing', record_type: 'customer', record_id: 'cus_tampered', disposition: 'erase' }],
+    generated_at: '2025-01-01T00:00:00.000Z',
+  };
+  const planHash = hashPlan(body);
+  savePlan(caseId, body, planHash, 1);
+  recordApproval(caseId, planHash, 'reviewer', 'reviewed');
+  db.prepare('UPDATE plans SET body = ? WHERE case_id = ?').run(JSON.stringify({ ...body, actions: [] }), caseId);
+
+  let postgresCalled = false;
+  const result = await executeBillingCleanup({
+    caseId, planHash, approvedBy: 'reviewer',
+    postgresTransaction: async () => { postgresCalled = true; },
+    billingErase: async () => {},
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /plan integrity check failed/);
+  assert.equal(postgresCalled, false);
+});
+
+test('rejects an unapproved hash before either executor is called', async () => {
   let postgresCalled = false;
   let billingCalled = false;
   const result = await executeBillingCleanup(options([
@@ -68,4 +101,9 @@ test('returns a structured failure and skips billing when PostgreSQL rolls back'
   assert.equal(result.erased.length, 0);
   assert.match(result.error, /rolled back/);
   assert.equal(billingCalled, false);
+});
+
+test.after(() => {
+  close();
+  fs.rmSync(directory, { recursive: true, force: true });
 });
