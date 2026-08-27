@@ -11,7 +11,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { startHttpMcp } from '../mcp/http-transport.js';
-import { addFinding, close, createCase, getCase, listCases, recordApproval, savePlan } from './db.js';
+import { addFinding, close, completeDiscovery, createCase, getCase, listCases, recordApproval, savePlan } from './db.js';
 import { executeBillingCleanup } from './billing-executor.js';
 import { oublietteExecuteErasure } from './execution.js';
 import { createSandboxMinioClient, executeSandboxMinioDeletion } from './minio-executor.js';
@@ -120,12 +120,20 @@ export function createServer({ interfaces = defaultExecutionInterfaces } = {}) {
     inputSchema: { case_id: caseId, ...finding }, annotations: write,
   }, async ({ case_id, ...value }) => text(addFinding(case_id, value)));
 
+  server.registerTool('case_complete_discovery', {
+    description: 'Mark discovery complete for a case. Call this only after every discovery finding for the case has been recorded; plan_create refuses to build a plan until this has been called for the case\'s current findings, so an investigation that aborts partway (for example on a truncated storage query) can never be planned or executed from its partial findings.',
+    inputSchema: { case_id: caseId }, annotations: write,
+  }, async ({ case_id }) => text(completeDiscovery(case_id)));
+
   server.registerTool('plan_create', {
-    description: 'Build and persist a deletion plan from the current findings. Concurrent case changes cause plan creation to fail; returns the SHA-256 hash to review.',
+    description: 'Build and persist a deletion plan from the current findings. Requires case_complete_discovery to have been called for the case\'s current findings. Concurrent case changes cause plan creation to fail; returns the SHA-256 hash to review.',
     inputSchema: { case_id: caseId }, annotations: write,
   }, async ({ case_id }) => {
     const value = getCase(case_id);
     if (!value) throw new Error(`case not found: ${case_id}`);
+    if (!value.discovery_completed_at) {
+      throw new Error(`case ${case_id} has not completed discovery; refusing to plan from a possibly-partial investigation`);
+    }
     const body = buildPlan({ case_id, findings: value.findings });
     const planHash = hashPlan(body);
     return text({ ...savePlan(case_id, body, planHash, value.revision), body, plan_hash: planHash });
