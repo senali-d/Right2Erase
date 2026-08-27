@@ -22,6 +22,69 @@ const systemFor = (system) => {
   return null;
 };
 
+const databaseTableFor = new Map([
+  ['order_item', 'order_items'], ['order_items', 'order_items'],
+  ['refund', 'refunds'], ['refunds', 'refunds'], ['order', 'orders'], ['orders', 'orders'],
+  ['support_ticket', 'support_tickets'], ['support_tickets', 'support_tickets'],
+  ['upload', 'uploads'], ['uploads', 'uploads'], ['account_email', 'account_emails'],
+  ['account_emails', 'account_emails'], ['event', 'event_log'], ['event_log', 'event_log'],
+  ['account', 'accounts'], ['accounts', 'accounts'],
+]);
+
+function objectKey(value) {
+  if (typeof value === 'string') return value;
+  if (value && typeof value === 'object') return value.key || value.object_key || null;
+  return null;
+}
+
+function resultFailure(result) {
+  return result == null || result.ok === false || result.success === false
+    || Number(result.failed) > 0 || Number(result.counts?.failed) > 0
+    || (Array.isArray(result.results) && result.results.some((item) => item?.status !== 'deleted'));
+}
+
+function confirmedActions(system, actions, result) {
+  if (resultFailure(result)) throw new Error(`${system} execution did not confirm successful deletion`);
+  if (typeof result.deleted === 'number') {
+    if (result.deleted !== actions.length) throw new Error(`${system} execution returned an incomplete deletion result`);
+    return actions;
+  }
+
+  if (system === 'database') {
+    const counts = result.counts || result;
+    const expected = new Map();
+    for (const action of actions) {
+      const table = databaseTableFor.get(action.record_type);
+      if (!table) throw new Error(`database execution returned an unsupported record type: ${action.record_type}`);
+      expected.set(table, (expected.get(table) || 0) + 1);
+    }
+    if ([...expected].some(([table, count]) => counts?.[table] !== count)) {
+      throw new Error('database execution returned incomplete deletion counts');
+    }
+    return actions;
+  }
+
+  if (system === 'minio' && Array.isArray(result.results)) {
+    const deleted = new Set(result.results.filter((item) => item?.status === 'deleted').map((item) => objectKey(item.key)));
+    const expected = new Set(actions.map((action) => objectKey(action.locator)));
+    if (deleted.size !== expected.size || [...expected].some((key) => !key || !deleted.has(key))) {
+      throw new Error('minio execution returned incomplete deletion results');
+    }
+    return actions;
+  }
+
+  if (system === 'billing' && Array.isArray(result.erased)) {
+    const erased = new Set(result.erased.map(String));
+    const expected = new Set(actions.map((action) => String(action.record_id)));
+    if (erased.size !== expected.size || [...expected].some((id) => !erased.has(id))) {
+      throw new Error('billing execution returned incomplete deletion results');
+    }
+    return actions;
+  }
+
+  throw new Error(`${system} execution did not return confirmed deletions`);
+}
+
 function readExecutionState(caseId, planHash, approvedBy) {
   const subject = db.prepare('SELECT * FROM cases WHERE id = ?').get(caseId);
   if (!subject) throw new Error(`case not found: ${caseId}`);
@@ -123,16 +186,21 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
   })();
 
   const systems = {};
+  const confirmedManifest = [];
   try {
     for (const name of ['database', 'minio', 'billing']) {
       const execute = interfaces?.[name];
       if (grouped[name].length && typeof execute !== 'function') throw new Error(`${name} execution interface is not configured`);
-      systems[name] = grouped[name].length
-        ? { ok: true, result: await execute({ case_id: caseId, plan_hash: planHash, actions: grouped[name] }) }
-        : { ok: true, result: null, skipped: true };
+      if (!grouped[name].length) {
+        systems[name] = { ok: true, result: null, skipped: true };
+        continue;
+      }
+      const result = await execute({ case_id: caseId, plan_hash: planHash, actions: grouped[name] });
+      confirmedManifest.push(...confirmedActions(name, grouped[name], result));
+      systems[name] = { ok: true, result };
     }
     const certificate = recordExecutionCertificate({ caseId, planHash, approvedBy,
-      manifest: eraseManifest, withheld });
+      manifest: confirmedManifest, withheld });
     return { case_id: caseId, plan_hash: planHash, approved_by: approvedBy, systems, withheld, certificate };
   } catch (error) {
     db.prepare("UPDATE cases SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'executing'").run(now(), caseId);

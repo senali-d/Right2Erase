@@ -5,7 +5,7 @@ import os from 'node:os';
 
 const directory = fs.mkdtempSync(`${os.tmpdir()}/oubliette-test-`);
 process.env.OUBLIETTE_DB_PATH = `${directory}/cases.db`;
-const { createCase, addFinding, savePlan, recordApproval, close } = await import('../src/db.js');
+const { createCase, addFinding, savePlan, recordApproval, getCase, close } = await import('../src/db.js');
 const { buildPlan, hashPlan } = await import('../src/plan.js');
 const { oublietteExecuteErasure } = await import('../src/execution.js');
 const { executeCertificate } = await import('../src/erasure.js');
@@ -46,6 +46,24 @@ test('orchestrates all systems and certifies withheld actions', async () => {
   assert.equal(result.certificate.plan_hash, planHash);
   assert.equal(result.certificate.manifest.length, 3);
   assert.deepEqual(result.certificate.manifest.map((item) => item.system), ['postgres', 'minio', 'billing']);
+});
+
+test('rejects explicit adapter failure results without certifying the plan', async () => {
+  const { planHash } = approvedCase('adapter-failure-result', [
+    { system: 'postgres', record_type: 'account', record_id: 10, disposition: 'erase' },
+    { system: 'minio', record_type: 'object', record_id: 'uploads/failure', disposition: 'erase' },
+  ]);
+  const calls = [];
+  await assert.rejects(oublietteExecuteErasure({
+    caseId: 'adapter-failure-result', planHash, approvedBy: 'human@example.test', interfaces: {
+      database: async () => ({ deleted: 1 }),
+      minio: async () => { calls.push('minio'); return { success: false, counts: { requested: 1, deleted: 0, failed: 1 } }; },
+      billing: async () => { calls.push('billing'); return { deleted: 0 }; },
+    },
+  }), /minio execution did not confirm/);
+  assert.deepEqual(calls, ['minio']);
+  assert.equal(getCase('adapter-failure-result').status, 'failed');
+  assert.equal(getCase('adapter-failure-result').certificate, undefined);
 });
 
 test('refuses an unapproved or non-canonical plan before adapters run', async () => {
