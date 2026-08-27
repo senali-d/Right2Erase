@@ -46,7 +46,11 @@ MCP_TRANSPORT=http npm run mcp:oubliette:http  # http://127.0.0.1:4014/mcp
 
 The database defaults to `.oubliette/oubliette.db` and can be relocated with
 `OUBLIETTE_DB_PATH`. The intended workflow is `case_create` → `finding_add` →
-`plan_create` → human `plan_approve` → `certificate_record`.
+`plan_create` → human `plan_approve` → `oubliette_execute_erasure`. The execution
+tool is the sole destructive Oubliette entry point: it revalidates the canonical
+hash, approval identity, current revision, and withholds before calling injected
+database, MinIO, and billing interfaces. Those interfaces intentionally refuse
+until deployment wiring supplies safe, transactional adapters.
 
 ## Read-only discovery MCPs
 
@@ -62,3 +66,11 @@ npm run mcp:storage:http  # http://127.0.0.1:4013/mcp
 The billing adapter remains separate at `http://127.0.0.1:4011/mcp`; its
 `billing_erase_customer` tool is the only destructive operation and requires
 the approved plan hash at execution time.
+
+Sandbox MinIO execution is isolated in `src/minio-executor.js`. It accepts no
+free-form object list: keys are derived only from erase actions in a hash-
+validated, approved plan, withheld keys are rejected, and PostgreSQL must report
+`{ success: true }` before the injected fixture client is called. The executor
+returns per-object results and requested/deleted/failed counts. The discovery
+adapter remains read-only; production clients are never constructed by this
+path.
