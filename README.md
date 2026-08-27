@@ -21,7 +21,7 @@ cd fixture && npm run seed
 To reset the fixture between runs, use:
 
 ```bash
-cd fixture && npm run reset
+make reset
 ```
 
 ## Qodo Code Review Evidence
