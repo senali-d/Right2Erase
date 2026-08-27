@@ -132,9 +132,12 @@ export function addFinding(caseId, finding) {
   return getCase(caseId).findings.at(-1);
 }
 
-export function savePlan(caseId, body, planHash) {
+export function savePlan(caseId, body, planHash, expectedRevision) {
   const transaction = db.transaction(() => {
     const subject = mutableCase(caseId);
+    if (!Number.isInteger(expectedRevision) || expectedRevision !== subject.revision) {
+      throw new Error('case changed while building plan; rebuild it from the current findings');
+    }
     const version = db.prepare('SELECT COALESCE(MAX(version), 0) + 1 AS version FROM plans WHERE case_id = ?').get(caseId).version;
     const timestamp = now();
     db.prepare('INSERT INTO plans (case_id, version, body, plan_hash, case_revision, created_at) VALUES (?, ?, ?, ?, ?, ?)')

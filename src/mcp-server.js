@@ -52,14 +52,14 @@ function createServer() {
   }, async ({ case_id, ...value }) => text(addFinding(case_id, value)));
 
   server.registerTool('plan_create', {
-    description: 'Build and persist a deletion plan from findings. Terminal cases cannot be mutated; returns the SHA-256 hash to review.',
+    description: 'Build and persist a deletion plan from the current findings. Concurrent case changes cause plan creation to fail; returns the SHA-256 hash to review.',
     inputSchema: { case_id: caseId }, annotations: write,
   }, async ({ case_id }) => {
     const value = getCase(case_id);
     if (!value) throw new Error(`case not found: ${case_id}`);
     const body = buildPlan({ case_id, findings: value.findings });
     const planHash = hashPlan(body);
-    return text({ ...savePlan(case_id, body, planHash), body, plan_hash: planHash });
+    return text({ ...savePlan(case_id, body, planHash, value.revision), body, plan_hash: planHash });
   });
 
   server.registerTool('plan_approve', {
