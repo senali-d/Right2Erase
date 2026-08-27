@@ -83,7 +83,7 @@ function createServer() {
 }
 
 if (process.env.MCP_TRANSPORT === 'http') {
-  startHttpMcp(createServer, { name: 'shopkart-db', port: Number(process.env.MCP_PORT || 4012) });
+  startHttpMcp(createServer, { name: 'shopkart-db', port: Number(process.env.MCP_DB_PORT || process.env.MCP_PORT || 4012) });
 } else {
   await createServer().connect(new StdioServerTransport());
 }
