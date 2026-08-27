@@ -5,6 +5,8 @@
  * API behind a small interface and makes it impossible for this module to
  * discover (and consequently erase) billing records on its own.
  */
+import { normalizeSystem } from './system.js';
+
 async function contextFromDatabase(caseId, planHash, approvedBy) {
   const { db } = await import('./db.js');
   return contextFromDatabaseWith(db, caseId, planHash, approvedBy);
@@ -33,7 +35,7 @@ async function contextFromDatabaseWith(db, caseId, planHash, approvedBy) {
 
 function plannedBillingRecords(plan) {
   const actions = Array.isArray(plan?.actions) ? plan.actions : [];
-  return actions.filter((action) => action?.system === 'billing' && action?.record_type === 'customer');
+  return actions.filter((action) => normalizeSystem(action?.system) === 'billing' && action?.record_type === 'customer');
 }
 
 async function loadBillingProgress(caseId, planHash, customerId) {

@@ -80,6 +80,26 @@ test('normalizes every MinIO alias and case variant after the database phase com
   assert.equal(getCase('minio-aliases').status, 'completed');
 });
 
+test('real billing execution accepts case-insensitive billing system values', async () => {
+  const { planHash } = approvedCase('billing-case-insensitive', [
+    { system: 'BiLlInG', record_type: 'customer', record_id: 'cus_case-insensitive', disposition: 'erase' },
+  ]);
+  const erased = [];
+  const interfaces = createRealExecutionInterfaces({
+    billingErase: async ({ customerId }) => {
+      erased.push(customerId);
+      return { ok: true, erased: true };
+    },
+  });
+
+  const result = await oublietteExecuteErasure({
+    caseId: 'billing-case-insensitive', planHash, approvedBy: 'human@example.test', interfaces,
+  });
+  assert.deepEqual(erased, ['cus_case-insensitive']);
+  assert.equal(result.certificate.manifest.length, 1);
+  assert.equal(result.certificate.manifest[0].system, 'BiLlInG');
+});
+
 test('keeps certificate, case, and execution run terminal state consistent on SQLite finalization failure', async () => {
   const { planHash } = approvedCase('finalization-sqlite-error', [
     { system: 'billing', record_type: 'customer', record_id: 'cus_finalization' },
