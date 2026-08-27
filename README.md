@@ -62,3 +62,11 @@ npm run mcp:storage:http  # http://127.0.0.1:4013/mcp
 The billing adapter remains separate at `http://127.0.0.1:4011/mcp`; its
 `billing_erase_customer` tool is the only destructive operation and requires
 the approved plan hash at execution time.
+
+Sandbox MinIO execution is isolated in `src/minio-executor.js`. It accepts no
+free-form object list: keys are derived only from erase actions in a hash-
+validated, approved plan, withheld keys are rejected, and PostgreSQL must report
+`{ success: true }` before the injected fixture client is called. The executor
+returns per-object results and requested/deleted/failed counts. The discovery
+adapter remains read-only; production clients are never constructed by this
+path.
