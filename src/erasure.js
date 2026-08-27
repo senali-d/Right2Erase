@@ -1,5 +1,5 @@
 import { db, hydrate, now } from './db.js';
-import { hashPlan } from './plan.js';
+import { hashPlan, validateDeletionPlan } from './plan.js';
 
 /**
  * Reload and verify the exact plan selected for execution.
@@ -46,6 +46,14 @@ export function executeCertificate({ caseId, planHash, approvedBy, manifest = []
     if (subject.status === 'completed' || db.prepare('SELECT 1 FROM certificates WHERE case_id = ?').get(caseId)) {
       throw new Error('case already has a certificate');
     }
+
+    let reviewedPlan;
+    try {
+      reviewedPlan = JSON.parse(plan.body);
+    } catch {
+      throw new Error('stored plan is malformed');
+    }
+    validateDeletionPlan(reviewedPlan, manifest, withheld);
 
     db.prepare(`INSERT INTO certificates (case_id, plan_hash, approved_by, manifest, withheld, executed_at)
       VALUES (?, ?, ?, ?, ?, ?)`).run(caseId, planHash, approvedBy, JSON.stringify(manifest), JSON.stringify(withheld), timestamp);
