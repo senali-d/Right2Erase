@@ -33,6 +33,21 @@ available in the GitHub PR: https://github.com/senali-d/Right2Erase/pull/1
 
 From `fixture/`: `npm run up`, `npm run seed`, `npm run truth`, `npm run reset`, and `npm run mcp:billing:http` remain available. From the repository root, use `make mcp-billing-http` to start the billing MCP adapter.
 
+## Oubliette case database
+
+Phase 1 now includes a durable SQLite case-management MCP server in `src/`. It stores
+cases, findings, immutable plan versions and hashes, approvals, and execution
+certificates; it does not perform source-system deletion.
+
+```bash
+npm run mcp:oubliette              # stdio
+MCP_TRANSPORT=http npm run mcp:oubliette:http  # http://127.0.0.1:4014/mcp
+```
+
+The database defaults to `.oubliette/oubliette.db` and can be relocated with
+`OUBLIETTE_DB_PATH`. The intended workflow is `case_create` → `finding_add` →
+`plan_create` → human `plan_approve` → `certificate_record`.
+
 ## Read-only discovery MCPs
 
 The database and storage adapters expose discovery only; every tool is

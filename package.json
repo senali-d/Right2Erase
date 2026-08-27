@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "workspaces": ["fixture"],
+  "workspaces": [
+    "fixture"
+  ],
   "scripts": {
     "setup": "npm install && npm run up && npm run seed",
     "up": "docker compose up -d --wait",
@@ -17,7 +19,14 @@
     "mcp:db:http": "MCP_TRANSPORT=http node mcp/database-server.js",
     "mcp:storage": "node mcp/storage-server.js",
     "mcp:storage:http": "MCP_TRANSPORT=http node mcp/storage-server.js",
+    "mcp:oubliette": "node src/mcp-server.js",
+    "mcp:oubliette:http": "MCP_TRANSPORT=http node src/mcp-server.js",
     "test": "npm --workspaces run test --if-present"
   },
-  "engines": { "node": ">=20" }
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.10.0"
+  }
 }
