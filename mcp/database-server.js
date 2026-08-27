@@ -21,12 +21,20 @@ function createServer() {
     description, inputSchema, annotations: readOnly,
   }, handler);
 
-  tool('db_find_accounts', 'Find accounts by exact email (current or historical) or exact display name. Never use name alone to select a deletion target.', {
+  tool('db_find_accounts', 'Find accounts by exact email (current or historical) or exact display name. Never use name alone to select a deletion target. account_emails has no cross-account uniqueness constraint, so a historical address can resolve to more than one account; check matched_via on every row and treat multiple distinct accounts as a collision to resolve manually, not a set of deletion targets.', {
     email: z.string().email().optional(), full_name: z.string().min(1).max(200).optional(),
   }, async ({ email, full_name }) => {
     if (!email && !full_name) throw new Error('email or full_name is required');
     const { rows } = await pool.query(
-      `SELECT id, email, full_name, country, last_seen_ip, created_at FROM accounts a
+      `SELECT a.id, a.email, a.full_name, a.country, a.last_seen_ip, a.created_at,
+              CASE
+                WHEN $1::text IS NOT NULL AND a.email = $1 THEN 'current_email'
+                WHEN $1::text IS NOT NULL AND EXISTS (
+                  SELECT 1 FROM account_emails ae WHERE ae.account_id = a.id AND ae.email = $1
+                ) THEN 'historical_email'
+                ELSE 'full_name'
+              END AS matched_via
+       FROM accounts a
        WHERE ($1::text IS NOT NULL AND (a.email = $1 OR EXISTS (
                SELECT 1 FROM account_emails ae WHERE ae.account_id = a.id AND ae.email = $1
              )))

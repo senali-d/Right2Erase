@@ -57,6 +57,24 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       ? customers
       : (customers.results || customers.customers || customers.rows || []);
 
+    // account_emails has no cross-account uniqueness constraint, so a
+    // historical address can legitimately be recycled onto a different
+    // person's account. Multiple distinct accounts matching subject_email is
+    // therefore an identity collision, not a set of erasure targets - never
+    // auto-resolve it, since silently picking one (or erasing all of them)
+    // risks destroying an unrelated person's data.
+    const distinctAccountIds = new Set(
+      accountRows.map((row) => row.id ?? row.account_id).filter((id) => id != null),
+    );
+    if (distinctAccountIds.size > 1) {
+      const describe = accountRows
+        .map((row) => `account ${row.id ?? row.account_id} (${row.matched_via || 'unknown match'})`)
+        .join(', ');
+      throw new Error(
+        `ambiguous identity for ${subject_email}: matches ${distinctAccountIds.size} distinct accounts [${describe}]; resolve the collision manually before opening a case`,
+      );
+    }
+
     const rowsOf = (value) => (Array.isArray(value) ? value : (value?.rows || []));
     const addRowFindings = (rows, record_type, disposition = 'erase') => Promise.all(
       rows.map((row) => call('finding_add', {
@@ -64,26 +82,58 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       })),
     );
 
+    // MinIO objects are keyed by account-ID path (uploads/acct_<id>/), not by
+    // email, so per-account prefix listings and the email search are separate
+    // discovery paths that can surface the same object; dedupe by key.
+    const minioObjects = new Map();
+    const collectMinioObjects = (queryLabel, response) => {
+      if (response.truncated) {
+        throw new Error(`storage query (${queryLabel}) truncated at ${response.limit} results; refusing to plan an incomplete object erasure for ${subject_email}`);
+      }
+      for (const object of response.objects || []) minioObjects.set(object.key, object);
+    };
+
     for (const account of accountRows) {
       const accountId = account.id || account.account_id;
       if (!accountId) continue;
-      const [emails, orders, tickets, uploads] = await Promise.all([
+      const [emails, orders, tickets, uploads, accountObjects] = await Promise.all([
         call('db_get_account_emails', { account_id: accountId }),
         call('db_list_orders', { account_id: accountId }),
         call('db_list_support_tickets', { account_id: accountId }),
         call('db_search_uploads', { account_id: accountId }),
+        call('storage_list_objects', { prefix: `uploads/acct_${accountId}/` }),
       ]);
+      collectMinioObjects(`account ${accountId}`, accountObjects);
       const orderRows = rowsOf(orders);
       const orderIds = orderRows.map((order) => order.id).filter(Boolean);
       const orderNumbers = orderRows.map((order) => order.order_number).filter(Boolean);
+      // db_search_event_log accepts at most 100 emails per call, but
+      // db_get_account_emails has no such cap; partition every known address
+      // into batches so an account with a long historical-email chain doesn't
+      // silently lose event-log coverage past the first 100.
       const knownEmails = [...new Set([subject_email, ...rowsOf(emails).map((row) => row.email)])]
-        .filter(Boolean).slice(0, 100);
-      const [items, refunds, retainedRefunds, logs] = await Promise.all([
+        .filter(Boolean);
+      const emailBatches = [];
+      for (let i = 0; i < knownEmails.length; i += 100) emailBatches.push(knownEmails.slice(i, i + 100));
+      if (emailBatches.length === 0) emailBatches.push([]);
+
+      const [items, refunds, retainedRefunds, ...logBatches] = await Promise.all([
         orderIds.length ? call('db_list_order_items', { order_ids: orderIds }) : [],
         orderIds.length ? call('db_list_refunds', { order_ids: orderIds }) : [],
         orderNumbers.length ? call('db_list_retained_refunds', { order_numbers: orderNumbers }) : [],
-        call('db_search_event_log', { emails: knownEmails, ip_address: account.last_seen_ip || undefined }),
+        // The IP condition is OR'd server-side, so passing it on every batch
+        // would return the same IP-matched rows in each response; scope it to
+        // the first batch and dedupe the merged rows defensively below.
+        ...emailBatches.map((batch, index) => call('db_search_event_log', {
+          emails: batch,
+          ip_address: index === 0 ? (account.last_seen_ip || undefined) : undefined,
+        })),
       ]);
+      const eventRows = new Map();
+      for (const batch of logBatches) {
+        for (const row of rowsOf(batch)) eventRows.set(row.id, row);
+      }
+      const logs = [...eventRows.values()];
 
       // Every deletable row becomes its own finding so plan_create can turn it
       // into an executable leaf-to-root action; retained refunds are recorded
@@ -112,14 +162,13 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       await call('finding_add', { case_id: caseId, system: 'billing', record_type: 'customer', record_id: customerId, metadata: { customer, details, charges, preview }, disposition: 'erase' });
     }
 
-    const search = await call('storage_search_objects', { query: subject_email });
-    if (search.truncated) {
-      // The search tool exposes no continuation cursor, so a truncated result
-      // is an incomplete view of the subject's objects; proceeding would plan
-      // an erasure that silently leaves matching objects behind.
-      throw new Error(`storage_search_objects truncated at ${search.limit} results; refusing to plan an incomplete object erasure for ${subject_email}`);
-    }
-    await Promise.all((search.objects || []).map((object) => call('finding_add', {
+    // Email search catches objects not scoped to a resolved account (e.g. keys
+    // that embed the address itself); the account-ID prefix listings above are
+    // the primary discovery path since objects are keyed by account, not email.
+    const emailSearch = await call('storage_search_objects', { query: subject_email });
+    collectMinioObjects(`email ${subject_email}`, emailSearch);
+
+    await Promise.all([...minioObjects.values()].map((object) => call('finding_add', {
       case_id: caseId, system: 'minio', record_type: 'object', record_id: object.key, locator: object.key, metadata: { object }, disposition: 'erase',
     })));
     return { case_id: caseId, accounts, customers, case: caseRecord };
