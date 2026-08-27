@@ -116,7 +116,9 @@ if (!planPath) {
 
 const plan = JSON.parse(await readFile(planPath, 'utf8'));
 const e = walk(expected.delete);
-const g = walk(plan.delete || {});
+const actualDelete = plan.delete;
+const g = walk(actualDelete && typeof actualDelete === 'object' && !Array.isArray(actualDelete)
+  ? actualDelete : {});
 let bad = 0;
 
 console.log('\n  key                        expected   agent');
@@ -127,11 +129,41 @@ for (const k of Object.keys(e)) {
   console.log(`  ${ok ? '✓' : '✗'} ${k.padEnd(24)} ${String(e[k]).padStart(6)}  ${String(g[k] ?? '—').padStart(6)}`);
 }
 
-const withheldOk = (plan.withhold || []).length === expected.withhold.length;
-if (!withheldOk) bad++;
-console.log(`  ${withheldOk ? '✓' : '✗'} withheld records         ${String(expected.withhold.length).padStart(6)}  ${String((plan.withhold || []).length).padStart(6)}`);
+// A matching set of counts is not enough: an extra target can make an unsafe
+// plan look valid.  The delete manifest is deliberately a closed set.
+const expectedDeleteKeys = new Set(Object.keys(e));
+const actualDeleteKeys = Object.keys(g);
+const unexpectedDeleteKeys = actualDeleteKeys.filter((k) => !expectedDeleteKeys.has(k));
+if (unexpectedDeleteKeys.length || !actualDelete || Array.isArray(actualDelete)
+    || typeof actualDelete !== 'object') {
+  bad++;
+  console.log(`  ✗ unexpected delete target(s): ${
+    unexpectedDeleteKeys.join(', ') || '(delete must be an object)'}`);
+}
 
-const swept = (plan.delete?.account_ids || []).filter((id) =>
+// Compare retained refunds by their durable identity, not by position or
+// array length.  This catches both a substituted record and duplicate entries.
+const identity = (record) => record && record.table != null && record.id != null
+  ? `${record.table}:${record.id}` : null;
+const expectedWithhold = new Set(expected.withhold.map(identity));
+const actualWithhold = Array.isArray(plan.withhold) ? plan.withhold : [];
+const actualWithholdIds = actualWithhold.map(identity);
+const actualWithholdSet = new Set(actualWithholdIds);
+const duplicateWithholdIds = actualWithholdIds.filter((id, i) =>
+  id === null || actualWithholdIds.indexOf(id) !== i);
+const missingWithholdIds = [...expectedWithhold].filter((id) => !actualWithholdSet.has(id));
+const unexpectedWithholdIds = [...actualWithholdSet].filter((id) => !expectedWithhold.has(id));
+const withheldOk = Array.isArray(plan.withhold)
+  && duplicateWithholdIds.length === 0
+  && missingWithholdIds.length === 0
+  && unexpectedWithholdIds.length === 0;
+if (!withheldOk) bad++;
+console.log(`  ${withheldOk ? '✓' : '✗'} withheld records         ${String(expectedWithhold.size).padStart(6)}  ${String(actualWithholdSet.size).padStart(6)}`);
+if (missingWithholdIds.length) console.log(`  ✗ missing withheld target(s): ${missingWithholdIds.join(', ')}`);
+if (unexpectedWithholdIds.length) console.log(`  ✗ unexpected withheld target(s): ${unexpectedWithholdIds.join(', ')}`);
+if (duplicateWithholdIds.length) console.log(`  ✗ duplicate/invalid withheld target(s): ${duplicateWithholdIds.join(', ')}`);
+
+const swept = (actualDelete?.account_ids || []).filter((id) =>
   expected.must_not_touch.some((c) => c.id === id));
 if (swept.length) {
   bad++;
