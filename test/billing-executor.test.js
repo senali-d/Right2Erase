@@ -15,6 +15,8 @@ const options = (actions, overrides = {}) => ({
   caseId: 'case-test', planHash: 'a'.repeat(64), approvedBy: 'reviewer',
   loadContext: () => ({ plan: plan(actions) }),
   postgresTransaction: async (context) => ({ manifest: context.actions }),
+  loadTransactionProgress: () => null,
+  saveTransactionProgress: async () => {},
   billingErase: async () => ({ erased: true }),
   ...overrides,
 });
@@ -87,6 +89,39 @@ test('invokes billing only after a successful PostgreSQL transaction', async () 
   }));
   assert.equal(result.ok, true);
   assert.deepEqual(order, ['postgres-commit', 'billing']);
+});
+
+test('resumes billing customers already deleted before a later failure', async () => {
+  const progress = new Map();
+  const transactionProgress = { value: null };
+  const calls = [];
+  let transactionCalls = 0;
+  let failSecond = true;
+  const resultOptions = options([
+    { system: 'billing', record_type: 'customer', record_id: 'cus_1', disposition: 'erase' },
+    { system: 'billing', record_type: 'customer', record_id: 'cus_2', disposition: 'erase' },
+  ], {
+    loadProgress: (_caseId, _planHash, customerId) => progress.get(customerId) || null,
+    saveProgress: async ({ customerId, status, result, error }) => progress.set(customerId, { status, result, error }),
+    loadTransactionProgress: () => transactionProgress.value,
+    saveTransactionProgress: async (value) => { transactionProgress.value = value; },
+    postgresTransaction: async (context) => { transactionCalls += 1; return { manifest: context.actions }; },
+    billingErase: async ({ customerId }) => {
+      calls.push(customerId);
+      if (customerId === 'cus_1' && calls.filter((id) => id === customerId).length > 1) throw new Error('duplicate request');
+      if (customerId === 'cus_2' && failSecond) { failSecond = false; throw new Error('temporary billing failure'); }
+      return { erased: true };
+    },
+  });
+  const first = await executeBillingCleanup(resultOptions);
+  assert.equal(first.ok, false);
+  assert.deepEqual(first.erased, ['cus_1']);
+
+  const second = await executeBillingCleanup(resultOptions);
+  assert.equal(second.ok, true);
+  assert.deepEqual(second.erased, ['cus_1', 'cus_2']);
+  assert.equal(transactionCalls, 1);
+  assert.deepEqual(calls, ['cus_1', 'cus_2', 'cus_2']);
 });
 
 test('returns a structured failure and skips billing when PostgreSQL rolls back', async () => {

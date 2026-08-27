@@ -83,6 +83,24 @@ db.exec(`
     completed_at TEXT NOT NULL,
     PRIMARY KEY (case_id, plan_hash, system)
   );
+  CREATE TABLE IF NOT EXISTS billing_progress (
+    case_id TEXT NOT NULL,
+    plan_hash TEXT NOT NULL,
+    customer_id TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('deleted','failed')),
+    result TEXT,
+    error TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (case_id, plan_hash, customer_id)
+  );
+  CREATE TABLE IF NOT EXISTS billing_transactions (
+    case_id TEXT NOT NULL,
+    plan_hash TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status = 'committed'),
+    result TEXT,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (case_id, plan_hash)
+  );
 `);
 
 // Keep databases created before revision tracking readable. Existing plans and
