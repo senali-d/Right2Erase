@@ -21,13 +21,16 @@ function createServer() {
     description, inputSchema, annotations: readOnly,
   }, handler);
 
-  tool('db_find_accounts', 'Find accounts by exact email or exact display name. Never use name alone to select a deletion target.', {
+  tool('db_find_accounts', 'Find accounts by exact email (current or historical) or exact display name. Never use name alone to select a deletion target.', {
     email: z.string().email().optional(), full_name: z.string().min(1).max(200).optional(),
   }, async ({ email, full_name }) => {
     if (!email && !full_name) throw new Error('email or full_name is required');
     const { rows } = await pool.query(
-      `SELECT id, email, full_name, country, last_seen_ip, created_at FROM accounts
-       WHERE ($1::text IS NOT NULL AND email = $1) OR ($2::text IS NOT NULL AND full_name = $2)
+      `SELECT id, email, full_name, country, last_seen_ip, created_at FROM accounts a
+       WHERE ($1::text IS NOT NULL AND (a.email = $1 OR EXISTS (
+               SELECT 1 FROM account_emails ae WHERE ae.account_id = a.id AND ae.email = $1
+             )))
+          OR ($2::text IS NOT NULL AND a.full_name = $2)
        ORDER BY id`, [email ?? null, full_name ?? null],
     );
     return result(rows);
