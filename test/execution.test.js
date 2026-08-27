@@ -36,7 +36,8 @@ test('orchestrates all systems and certifies withheld actions', async () => {
   assert.deepEqual(calls.map(([name]) => name), ['database', 'minio', 'billing']);
   assert.equal(result.withheld.length, 1);
   assert.equal(result.certificate.plan_hash, planHash);
-  assert.deepEqual(result.certificate.manifest, result.systems);
+  assert.equal(result.certificate.manifest.length, 3);
+  assert.deepEqual(result.certificate.manifest.map((item) => item.system), ['postgres', 'minio', 'billing']);
 });
 
 test('refuses an unapproved or non-canonical plan before adapters run', async () => {
@@ -51,6 +52,36 @@ test('refuses an unapproved or non-canonical plan before adapters run', async ()
     oublietteExecuteErasure({ caseId: 'refusal', planHash, approvedBy: 'other@example.test', interfaces: { billing: async () => called.push(1) } }),
     /approved_by does not match/,
   );
+  assert.deepEqual(called, []);
+});
+
+test('does not run downstream systems after PostgreSQL failure and marks execution failed', async () => {
+  const { planHash } = approvedCase('postgres-failure', [
+    { system: 'postgres', record_type: 'account', record_id: 8, disposition: 'erase' },
+    { system: 'minio', record_type: 'object', record_id: 'uploads/b', disposition: 'erase' },
+    { system: 'billing', record_type: 'customer', record_id: 'cus_8', disposition: 'erase' },
+  ]);
+  const calls = [];
+  await assert.rejects(oublietteExecuteErasure({ caseId: 'postgres-failure', planHash, approvedBy: 'human@example.test', interfaces: {
+    database: async () => { calls.push('database'); throw new Error('rollback'); },
+    minio: async () => { calls.push('minio'); },
+    billing: async () => { calls.push('billing'); },
+  }}), /rollback/);
+  assert.deepEqual(calls, ['database']);
+  assert.equal((await import('../src/db.js')).getCase('postgres-failure').status, 'failed');
+});
+
+test('rejects delete/withhold overlap before any adapter runs', async () => {
+  const { body, planHash } = approvedCase('overlap', [
+    { system: 'billing', record_type: 'customer', record_id: 'cus_overlap', disposition: 'erase' },
+  ]);
+  body.actions.push({ ...body.actions[0], disposition: 'retain' });
+  const called = [];
+  const { db } = await import('../src/db.js');
+  const overlappingHash = hashPlan(body);
+  db.prepare('UPDATE plans SET body = ?, plan_hash = ? WHERE plan_hash = ?').run(JSON.stringify(body), overlappingHash, planHash);
+  db.prepare('UPDATE approvals SET plan_hash = ? WHERE plan_hash = ?').run(overlappingHash, planHash);
+  await assert.rejects(oublietteExecuteErasure({ caseId: 'overlap', planHash: overlappingHash, approvedBy: 'human@example.test', interfaces: { billing: async () => called.push(1) } }), /duplicate or overlapping/);
   assert.deepEqual(called, []);
 });
 

@@ -89,7 +89,7 @@ export function buildPlan({ case_id, findings }) {
     record_type: finding.record_type,
     record_id: finding.record_id,
     locator: finding.locator ?? null,
-    disposition: finding.disposition,
+    disposition: finding.disposition ?? 'erase',
   }));
   return { case_id, actions, generated_at: new Date().toISOString() };
 }

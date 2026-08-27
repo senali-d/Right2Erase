@@ -1,5 +1,5 @@
 import { db, hydrate, now } from './db.js';
-import { hashPlan } from './plan.js';
+import { hashPlan, validateDeletionPlan } from './plan.js';
 import { executeCertificate } from './erasure.js';
 
 /**
@@ -69,6 +69,10 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
     else withheld.push(action);
   }
 
+  const eraseManifest = initial.actions.filter((action) => action.disposition === 'erase');
+  // Validate the exact deletion/withhold partition before any destructive adapter runs.
+  validateDeletionPlan(initial.body, eraseManifest, withheld);
+
   // Claim the revision before leaving SQLite. Finding writes are not allowed
   // while executing, so an adapter cannot be given a plan that changed later.
   const timestamp = now();
@@ -90,7 +94,7 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
         : { ok: true, result: null, skipped: true };
     }
     const certificate = executeCertificate({ caseId, planHash, approvedBy,
-      manifest: systems, withheld });
+      manifest: eraseManifest, withheld });
     return { case_id: caseId, plan_hash: planHash, approved_by: approvedBy, systems, withheld, certificate };
   } catch (error) {
     db.prepare("UPDATE cases SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'executing'").run(now(), caseId);
