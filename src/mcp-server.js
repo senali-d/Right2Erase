@@ -11,7 +11,6 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { startHttpMcp } from '../mcp/http-transport.js';
 import { addFinding, close, createCase, getCase, listCases, recordApproval, savePlan } from './db.js';
-import { executeCertificate } from './erasure.js';
 import { oublietteExecuteErasure } from './execution.js';
 import { buildPlan, hashPlan } from './plan.js';
 
@@ -78,11 +77,6 @@ function createServer() {
   }, async ({ case_id, plan_hash, approved_by }) => text(await oublietteExecuteErasure({
     caseId: case_id, planHash: plan_hash, approvedBy: approved_by,
   })));
-
-  server.registerTool('certificate_record', {
-    description: 'Record an execution certificate only for the latest approved plan and unchanged case revision.',
-    inputSchema: { case_id: caseId, plan_hash: z.string().length(64), approved_by: z.string().min(1).max(200), manifest: z.array(z.any()).default([]), withheld: z.array(z.any()).default([]) }, annotations: write,
-  }, async ({ case_id, plan_hash, approved_by, manifest, withheld }) => text(executeCertificate({ caseId: case_id, planHash: plan_hash, approvedBy: approved_by, manifest, withheld })));
 
   return server;
 }

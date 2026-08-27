@@ -8,6 +8,7 @@ process.env.OUBLIETTE_DB_PATH = `${directory}/cases.db`;
 const { createCase, addFinding, savePlan, recordApproval, close } = await import('../src/db.js');
 const { buildPlan, hashPlan } = await import('../src/plan.js');
 const { oublietteExecuteErasure } = await import('../src/execution.js');
+const { executeCertificate } = await import('../src/erasure.js');
 
 function approvedCase(id, findings) {
   createCase({ id, subject_email: `${id}@example.test` });
@@ -18,6 +19,13 @@ function approvedCase(id, findings) {
   recordApproval(id, planHash, 'human@example.test', 'reviewed');
   return { body, planHash };
 }
+
+test('certificate creation cannot be invoked outside execution', () => {
+  assert.throws(
+    () => executeCertificate({ caseId: 'not-executing', planHash: 'a'.repeat(64), approvedBy: 'human@example.test' }),
+    /certificate creation is internal/,
+  );
+});
 
 test('orchestrates all systems and certifies withheld actions', async () => {
   const findings = [
