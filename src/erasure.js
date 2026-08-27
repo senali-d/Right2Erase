@@ -1,4 +1,30 @@
 import { db, hydrate, now } from './db.js';
+import { hashPlan } from './plan.js';
+
+/**
+ * Reload and verify the exact plan selected for execution.
+ *
+ * The database row is intentionally read again at execution time. Checking
+ * both the supplied hash and the hash recorded with the row catches a plan
+ * whose body was changed after approval, as well as a caller selecting a
+ * different (or unknown) plan hash.
+ */
+export function validatePlanIntegrity({ caseId, planHash }) {
+  const storedPlan = db.prepare('SELECT * FROM plans WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash);
+  if (!storedPlan) throw new Error('plan hash does not match a stored plan for this case');
+
+  let body;
+  try {
+    body = JSON.parse(storedPlan.body);
+  } catch {
+    throw new Error('stored plan body is invalid');
+  }
+  const recomputedHash = hashPlan(body);
+  if (recomputedHash !== planHash || recomputedHash !== storedPlan.plan_hash) {
+    throw new Error('plan integrity check failed; stored plan body does not match its hash');
+  }
+  return hydrate(storedPlan);
+}
 
 export function executeCertificate({ caseId, planHash, approvedBy, manifest = [], withheld = [] }) {
   const timestamp = now();
@@ -7,8 +33,7 @@ export function executeCertificate({ caseId, planHash, approvedBy, manifest = []
     // plan change cannot race the certificate validation.
     const subject = db.prepare('SELECT * FROM cases WHERE id = ?').get(caseId);
     if (!subject) throw new Error(`case not found: ${caseId}`);
-    const plan = db.prepare('SELECT * FROM plans WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash);
-    if (!plan) throw new Error('plan hash does not match a stored plan for this case');
+    const plan = validatePlanIntegrity({ caseId, planHash });
     const latestPlan = db.prepare('SELECT * FROM plans WHERE case_id = ? ORDER BY version DESC LIMIT 1').get(caseId);
     if (!latestPlan || latestPlan.id !== plan.id || plan.case_revision !== subject.revision) {
       throw new Error('plan is stale; create and approve a new plan for the current case revision');
