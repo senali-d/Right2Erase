@@ -121,17 +121,20 @@ if (process.env.MCP_TRANSPORT === 'http') {
   const app = express();
   const transports = new Map();
   const sessionTimers = new Map();
+  const activeRequests = new Map();
   const sessionIdleTtlMs = positiveInteger(process.env.MCP_SESSION_TTL_MS, 5 * 60 * 1000);
   const maxSessions = positiveInteger(process.env.MCP_MAX_SESSIONS, 100);
   let pendingInitializations = 0;
   let shuttingDown = false;
 
   function refreshSession(id, transport) {
+    if (activeRequests.has(transport)) return;
+
     const previousTimer = sessionTimers.get(id);
     if (previousTimer) clearTimeout(previousTimer);
 
     const timer = setTimeout(async () => {
-      if (transports.get(id) !== transport) return;
+      if (activeRequests.has(transport) || transports.get(id) !== transport) return;
       transports.delete(id);
       sessionTimers.delete(id);
       try {
@@ -145,11 +148,33 @@ if (process.env.MCP_TRANSPORT === 'http') {
   }
 
   async function closeAllSessions() {
-    const activeTransports = [...transports.values()];
-    await Promise.allSettled(activeTransports.map((transport) => transport.close()));
+    const sessions = [...transports.values()];
+    await Promise.allSettled(sessions.map((transport) => transport.close()));
     transports.clear();
     for (const timer of sessionTimers.values()) clearTimeout(timer);
     sessionTimers.clear();
+  }
+
+  async function handleSessionRequest(transport, req, res, body) {
+    activeRequests.set(transport, (activeRequests.get(transport) || 0) + 1);
+    const previousId = transport.sessionId;
+    if (previousId && sessionTimers.has(previousId)) {
+      clearTimeout(sessionTimers.get(previousId));
+      sessionTimers.delete(previousId);
+    }
+
+    try {
+      await transport.handleRequest(req, res, body);
+    } finally {
+      const requestCount = activeRequests.get(transport) - 1;
+      if (requestCount > 0) {
+        activeRequests.set(transport, requestCount);
+      } else {
+        activeRequests.delete(transport);
+        const id = transport.sessionId;
+        if (id && transports.get(id) === transport) refreshSession(id, transport);
+      }
+    }
   }
 
   // Keep the security checks ahead of every MCP method, including session
@@ -210,12 +235,7 @@ if (process.env.MCP_TRANSPORT === 'http') {
             sessionTimers.delete(id);
           }
         };
-        try {
-          await createServer().connect(transport);
-        } catch (error) {
-          if (!initialized) pendingInitializations -= 1;
-          throw error;
-        }
+        await createServer().connect(transport);
       }
 
       if (!transport) {
@@ -224,8 +244,7 @@ if (process.env.MCP_TRANSPORT === 'http') {
         });
         return;
       }
-      if (transport.sessionId) refreshSession(transport.sessionId, transport);
-      await transport.handleRequest(req, res, req.body);
+      await handleSessionRequest(transport, req, res, req.body);
     } catch (error) {
       console.error('MCP HTTP error:', error);
       if (!res.headersSent) res.status(500).json({ error: 'MCP request failed' });
@@ -249,8 +268,12 @@ if (process.env.MCP_TRANSPORT === 'http') {
         res.status(sessionId ? 404 : 400).send('Invalid or missing MCP session');
         return;
       }
-      if (transport.sessionId) refreshSession(transport.sessionId, transport);
-      await transport.handleRequest(req, res);
+      try {
+        await handleSessionRequest(transport, req, res);
+      } catch (error) {
+        console.error(`MCP ${method.toUpperCase()} error:`, error);
+        if (!res.headersSent) res.status(500).send('MCP request failed');
+      }
     });
   }
 
