@@ -4,8 +4,8 @@ cd "$(dirname "$0")/.."
 npm install
 npm run up
 npm run seed
-if [[ -f agent/create-agent.js ]]; then node agent/create-agent.js || {
-  echo 'Agent registration skipped/failed; configure the agent SDK before registration.' >&2
-  exit 1
-}
+if [[ -n "${TRUEFORGE_SUBJECT_EMAIL:-}" ]]; then
+  node agent/create-agent.js "$TRUEFORGE_SUBJECT_EMAIL"
+else
+  echo 'TrueForge agent is configured; set TRUEFORGE_SUBJECT_EMAIL to run an investigation.'
 fi

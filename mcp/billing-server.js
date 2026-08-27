@@ -6,9 +6,8 @@
  * service the same way it reaches Postgres or GitHub, over MCP, with no
  * special-casing in the agent itself.
  *
- * Note the split between read tools and billing_erase_customer. Point your
- * TrueForge approval policy at that one tool name — it is the only thing here
- * that cannot be undone.
+ * The billing MCP adapter exposes discovery and dry-run preview only. Actual
+ * billing deletion is deliberately owned by Oubliette's approved execution path.
  *
  *   node mcp-server.js                    # stdio transport
  */
@@ -66,25 +65,6 @@ server.tool(
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ dry_run: true }),
-    }),
-  ),
-);
-
-server.tool(
-  'billing_erase_customer',
-  'IRREVERSIBLE. Permanently destroys a billing customer record, their saved '
-  + 'payment profile and their charge history. Requires human approval. Must be '
-  + 'called with the plan_hash that was approved; execution is recorded in the audit log.',
-  {
-    customer_id: z.string(),
-    case_id: z.string().describe('erasure case identifier'),
-    plan_hash: z.string().describe('hash of the approved plan; recorded for audit'),
-  },
-  async ({ customer_id, case_id, plan_hash }) => asText(
-    await call(`/customers/${encodeURIComponent(customer_id)}/erase`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ dry_run: false, case_id, plan_hash }),
     }),
   ),
 );

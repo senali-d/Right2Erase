@@ -63,9 +63,23 @@ npm run mcp:db:http       # http://127.0.0.1:4012/mcp
 npm run mcp:storage:http  # http://127.0.0.1:4013/mcp
 ```
 
-The billing adapter remains separate at `http://127.0.0.1:4011/mcp`; its
-`billing_erase_customer` tool is the only destructive operation and requires
-the approved plan hash at execution time.
+The billing adapter remains separate at `http://127.0.0.1:4011/mcp` and exposes
+read-only discovery plus dry-run preview. Billing deletion is reached only
+through Oubliette's approved execution path.
+
+## TrueForge agent
+
+Start the four HTTP MCP servers, then prepare an investigation plan with:
+
+```bash
+node agent/create-agent.js customer@example.com
+```
+
+The agent investigates through read-only tools, records findings, creates and
+rehearses a plan, and stops for human approval. Only an explicit approval lets
+it call `oubliette_execute_erasure`; the result includes the verification
+certificate. Server URLs and the approval policy are documented in
+`trueforge.config.json` and can be overridden with environment variables.
 
 Sandbox MinIO execution is isolated in `src/minio-executor.js`. It accepts no
 free-form object list: keys are derived only from erase actions in a hash-
