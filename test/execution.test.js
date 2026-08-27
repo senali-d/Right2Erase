@@ -5,7 +5,7 @@ import os from 'node:os';
 
 const directory = fs.mkdtempSync(`${os.tmpdir()}/oubliette-test-`);
 process.env.OUBLIETTE_DB_PATH = `${directory}/cases.db`;
-const { createCase, addFinding, savePlan, recordApproval, getCase, close } = await import('../src/db.js');
+const { createCase, addFinding, savePlan, recordApproval, getCase, db, close } = await import('../src/db.js');
 const { buildPlan, hashPlan } = await import('../src/plan.js');
 const { oublietteExecuteErasure } = await import('../src/execution.js');
 const { executeCertificate } = await import('../src/erasure.js');
@@ -117,6 +117,40 @@ test('refuses an unapproved or non-canonical plan before adapters run', async ()
     /approved_by does not match/,
   );
   assert.deepEqual(called, []);
+});
+
+test('does not treat an untracked failed case as a retryable execution', async () => {
+  const { planHash } = approvedCase('untracked-failure', [
+    { system: 'billing', record_type: 'customer', record_id: 'cus_untracked', disposition: 'erase' },
+  ]);
+  db.prepare("UPDATE cases SET status = 'failed' WHERE id = ?").run('untracked-failure');
+  await assert.rejects(
+    oublietteExecuteErasure({ caseId: 'untracked-failure', planHash, approvedBy: 'human@example.test', interfaces: { billing: async () => ({ deleted: 1 }) } }),
+    /case changed before execution/,
+  );
+});
+
+test('rejects a second execution while the first claim is active', async () => {
+  const { planHash } = approvedCase('exclusive-claim', [
+    { system: 'billing', record_type: 'customer', record_id: 'cus_exclusive', disposition: 'erase' },
+  ]);
+  let entered;
+  const enteredPromise = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const releasePromise = new Promise((resolve) => { release = resolve; });
+  const interfaces = { billing: async () => {
+    entered();
+    await releasePromise;
+    return { deleted: 1 };
+  } };
+  const first = oublietteExecuteErasure({ caseId: 'exclusive-claim', planHash, approvedBy: 'human@example.test', interfaces });
+  await enteredPromise;
+  await assert.rejects(
+    oublietteExecuteErasure({ caseId: 'exclusive-claim', planHash, approvedBy: 'human@example.test', interfaces }),
+    /already executing/,
+  );
+  release();
+  await first;
 });
 
 test('resumes committed phases when a downstream phase fails', async () => {

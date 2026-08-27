@@ -195,13 +195,14 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
   const timestamp = now();
   db.transaction(() => {
     const current = db.prepare('SELECT * FROM cases WHERE id = ?').get(caseId);
+    const run = db.prepare('SELECT * FROM execution_runs WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash);
     if (!current || current.revision !== initial.subject.revision
-        || !['approved', 'failed'].includes(current.status)) {
+        || !['approved', 'failed'].includes(current.status)
+        || (current.status === 'failed' && run?.status !== 'failed')) {
       throw new Error(current?.status === 'executing'
         ? 'case is already executing'
         : 'case changed before execution; refusing to execute');
     }
-    const run = db.prepare('SELECT * FROM execution_runs WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash);
     if (run?.status === 'executing') throw new Error('case is already executing');
     if (run?.status === 'completed') throw new Error('execution has already completed for this plan');
     if (run) {
