@@ -239,14 +239,16 @@ async function main() {
     tickets: 3,
   });
   log(`\n  subject: ${SUBJECT.email} (account ${subject.id})`);
-  log('  CASE 1  foreign-key ordering trap: 12 orders + items + refunds hang off the account');
+  log('  CASE 1  foreign-key ordering trap: 12 orders + items + settled refunds hang off the account');
 
   // ------------------------------------------------- CASE 2 retention hold
   const held = subject.orderIds[4];
+  // Live obligations are placed in the detached retention model. They retain
+  // only a non-PII order reference, so the customer hierarchy can be erased.
   await client.query(
-    `INSERT INTO refunds (order_id, amount_cents, status, reason, opened_at)
-     VALUES ($1,$2,'pending',$3,$4)`,
-    [held.id, Math.round(held.total * 0.4), 'Item returned, inspection pending', new Date('2025-08-11T09:14:00Z')],
+    `INSERT INTO retained_refunds (source_order_number, amount_cents, reason, opened_at)
+     VALUES ($1,$2,$3,$4)`,
+    [held.number, Math.round(held.total * 0.4), 'Item returned, inspection pending', new Date('2025-08-11T09:14:00Z')],
   );
   // ...and a settled one, which IS safe to delete. The agent has to tell them apart.
   const settled = subject.orderIds[1];

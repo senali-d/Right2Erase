@@ -53,11 +53,14 @@ async function truth(client, email) {
     `SELECT count(*)::int AS count FROM event_log
       WHERE email = ANY($1) OR ip_address = $2`, [allEmails, a.last_seen_ip]);
 
-  // Withheld: pending refunds are a live financial obligation.
+  // Withheld: retained refunds are live financial obligations detached from
+  // the customer hierarchy, so they survive deletion of the account and order.
   const { rows: held } = await client.query(
-    `SELECT r.id, o.order_number, r.amount_cents, r.reason FROM refunds r
-      JOIN orders o ON o.id = r.order_id
-     WHERE o.account_id=$1 AND r.status='pending'`, [a.id]);
+    `SELECT rr.id, rr.source_order_number AS order_number,
+            rr.amount_cents, rr.reason
+       FROM retained_refunds rr
+       JOIN orders o ON o.order_number = rr.source_order_number
+      WHERE o.account_id=$1`, [a.id]);
 
   // Anyone sharing the display name who must NOT be touched.
   const { rows: collisions } = await client.query(
@@ -79,11 +82,12 @@ async function truth(client, email) {
     },
     total_rows: 1 + orders + items + refundsSettled + tickets + linkedUploads + orphanUploads + events,
     withhold: held.map((h) => ({
-      table: 'refunds', id: h.id, order: h.order_number,
+      table: 'retained_refunds', id: h.id, order: h.order_number,
       amount_cents: h.amount_cents, reason: `retention: ${h.reason}`,
     })),
     must_not_touch: collisions,
-    // Leaf-to-root. Any other order and Postgres raises a FK violation.
+    // Leaf-to-root. Retained refunds are detached and are not part of this
+    // deletion path; any other order raises a FK violation.
     safe_delete_order: [
       'order_items', 'refunds(settled only)', 'orders',
       'support_tickets', 'uploads', 'account_emails', 'event_log', 'accounts',

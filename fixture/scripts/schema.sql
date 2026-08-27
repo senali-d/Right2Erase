@@ -3,13 +3,15 @@
 -- Deliberately shaped to make erasure non-trivial:
 --   * order_items and refunds hang off orders, orders hang off accounts,
 --     so deletion has a required order (leaf -> root).
---   * refunds.status = 'pending' marks records under a legal retention hold.
+--   * pending refunds are moved to retained_refunds, a detached legal-retention
+--     model that survives deletion of the customer hierarchy.
 --   * account_emails keeps historical addresses, so identity resolution has
 --     to follow a chain rather than matching one string.
 --   * uploads.account_id is nullable; some rows are only linkable via the
 --     object key, which forces a real search instead of a join.
 --   * event_log has no foreign key at all. It is matched on email or IP.
 
+DROP TABLE IF EXISTS retained_refunds CASCADE;
 DROP TABLE IF EXISTS refunds CASCADE;
 DROP TABLE IF EXISTS order_items CASCADE;
 DROP TABLE IF EXISTS orders CASCADE;
@@ -59,18 +61,28 @@ CREATE TABLE order_items (
     price_cents  INTEGER NOT NULL
 );
 
--- A refund with status 'pending' is money still owed to the customer.
--- Deleting it would destroy the record of a live financial obligation, so it
--- sits under retention until settled. This is the row the agent must refuse
--- to delete on its own authority.
+-- Settled refunds are ordinary order records and may be erased with the order.
 CREATE TABLE refunds (
     id            SERIAL PRIMARY KEY,
     order_id      INTEGER NOT NULL REFERENCES orders(id),
     amount_cents  INTEGER NOT NULL,
-    status        TEXT NOT NULL,           -- pending | settled
+    status        TEXT NOT NULL,           -- settled
     reason        TEXT NOT NULL,
     opened_at     TIMESTAMPTZ NOT NULL,
-    settled_at    TIMESTAMPTZ
+    settled_at    TIMESTAMPTZ NOT NULL,
+    CHECK (status = 'settled')
+);
+
+-- Live financial obligations are retained without a foreign key to the
+-- customer hierarchy. source_order_number is a non-PII audit reference; the
+-- customer account and order can therefore be deleted safely.
+CREATE TABLE retained_refunds (
+    id                  SERIAL PRIMARY KEY,
+    source_order_number TEXT NOT NULL,
+    amount_cents        INTEGER NOT NULL,
+    reason              TEXT NOT NULL,
+    opened_at            TIMESTAMPTZ NOT NULL,
+    retained_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE support_tickets (
