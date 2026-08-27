@@ -16,7 +16,8 @@ db.exec(`
     status TEXT NOT NULL DEFAULT 'discovered'
       CHECK (status IN ('discovered','planned','approved','executing','completed','failed')),
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 0
   );
   CREATE TABLE IF NOT EXISTS findings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +38,7 @@ db.exec(`
     version INTEGER NOT NULL,
     body TEXT NOT NULL,
     plan_hash TEXT NOT NULL,
+    case_revision INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     UNIQUE(case_id, version), UNIQUE(plan_hash)
   );
@@ -44,6 +46,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
     plan_hash TEXT NOT NULL,
+    case_revision INTEGER NOT NULL,
     approved_by TEXT NOT NULL,
     reason TEXT,
     approved_at TEXT NOT NULL
@@ -58,6 +61,22 @@ db.exec(`
     executed_at TEXT NOT NULL
   );
 `);
+
+// Keep databases created before revision tracking readable. Existing plans and
+// approvals are deliberately marked stale rather than silently trusted.
+const addColumn = (table, definition) => {
+  const column = definition.split(' ')[0];
+  const exists = db.prepare(`PRAGMA table_info(${table})`).all().some((item) => item.name === column);
+  if (exists) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${definition}`);
+  return true;
+};
+addColumn('cases', 'revision INTEGER NOT NULL DEFAULT 0');
+const plansMigrated = addColumn('plans', 'case_revision INTEGER NOT NULL DEFAULT 0');
+const approvalsMigrated = addColumn('approvals', 'case_revision INTEGER NOT NULL DEFAULT -1');
+if (plansMigrated || approvalsMigrated) {
+  db.exec('UPDATE plans SET case_revision = -1; UPDATE approvals SET case_revision = -1;');
+}
 
 export const now = () => new Date().toISOString();
 const parse = (value) => {
@@ -92,27 +111,40 @@ export function createCase({ id, subject_email, subject_name }) {
 
 export function addFinding(caseId, finding) {
   const timestamp = now();
-  db.prepare(`INSERT INTO findings (case_id, system, record_type, record_id, locator, metadata, disposition, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(caseId, finding.system, finding.record_type, String(finding.record_id), finding.locator ?? null,
-      JSON.stringify(finding.metadata ?? {}), finding.disposition ?? 'erase', timestamp);
-  db.prepare('UPDATE cases SET updated_at = ? WHERE id = ?').run(timestamp, caseId);
+  const transaction = db.transaction(() => {
+    if (!db.prepare('SELECT 1 FROM cases WHERE id = ?').get(caseId)) throw new Error(`case not found: ${caseId}`);
+    db.prepare(`INSERT INTO findings (case_id, system, record_type, record_id, locator, metadata, disposition, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(caseId, finding.system, finding.record_type, String(finding.record_id), finding.locator ?? null,
+        JSON.stringify(finding.metadata ?? {}), finding.disposition ?? 'erase', timestamp);
+    // A finding change creates a new case revision and invalidates prior plans.
+    db.prepare("UPDATE cases SET revision = revision + 1, status = 'discovered', updated_at = ? WHERE id = ?").run(timestamp, caseId);
+  });
+  transaction();
   return getCase(caseId).findings.at(-1);
 }
 
 export function savePlan(caseId, body, planHash) {
+  const subject = db.prepare('SELECT revision FROM cases WHERE id = ?').get(caseId);
+  if (!subject) throw new Error(`case not found: ${caseId}`);
   const version = db.prepare('SELECT COALESCE(MAX(version), 0) + 1 AS version FROM plans WHERE case_id = ?').get(caseId).version;
   const timestamp = now();
-  db.prepare('INSERT INTO plans (case_id, version, body, plan_hash, created_at) VALUES (?, ?, ?, ?, ?)')
-    .run(caseId, version, JSON.stringify(body), planHash, timestamp);
+  db.prepare('INSERT INTO plans (case_id, version, body, plan_hash, case_revision, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(caseId, version, JSON.stringify(body), planHash, subject.revision, timestamp);
   db.prepare("UPDATE cases SET status = 'planned', updated_at = ? WHERE id = ?").run(timestamp, caseId);
   return hydrate(db.prepare('SELECT * FROM plans WHERE case_id = ? AND version = ?').get(caseId, version));
 }
 
 export function recordApproval(caseId, planHash, approvedBy, reason) {
-  if (!db.prepare('SELECT 1 FROM cases WHERE id = ?').get(caseId)) throw new Error(`case not found: ${caseId}`);
-  if (!db.prepare('SELECT 1 FROM plans WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash)) throw new Error('plan hash does not match a stored plan for this case');
+  const subject = db.prepare('SELECT revision FROM cases WHERE id = ?').get(caseId);
+  if (!subject) throw new Error(`case not found: ${caseId}`);
+  const plan = db.prepare('SELECT * FROM plans WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash);
+  const latest = db.prepare('SELECT * FROM plans WHERE case_id = ? ORDER BY version DESC LIMIT 1').get(caseId);
+  if (!plan) throw new Error('plan hash does not match a stored plan for this case');
+  if (!latest || latest.id !== plan.id || plan.case_revision !== subject.revision) {
+    throw new Error('plan is stale; create a new plan for the current case revision');
+  }
   const timestamp = now();
-  db.prepare('INSERT INTO approvals (case_id, plan_hash, approved_by, reason, approved_at) VALUES (?, ?, ?, ?, ?)').run(caseId, planHash, approvedBy, reason ?? null, timestamp);
+  db.prepare('INSERT INTO approvals (case_id, plan_hash, case_revision, approved_by, reason, approved_at) VALUES (?, ?, ?, ?, ?, ?)').run(caseId, planHash, subject.revision, approvedBy, reason ?? null, timestamp);
   db.prepare("UPDATE cases SET status = 'approved', updated_at = ? WHERE id = ?").run(timestamp, caseId);
   return db.prepare('SELECT * FROM approvals WHERE case_id = ? ORDER BY id DESC LIMIT 1').get(caseId);
 }

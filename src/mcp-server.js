@@ -63,12 +63,12 @@ function createServer() {
   });
 
   server.registerTool('plan_approve', {
-    description: 'Record human approval for an exact stored plan hash.',
+    description: 'Record human approval for the latest plan at the current case revision. Older plan hashes cannot be approved.',
     inputSchema: { case_id: caseId, plan_hash: z.string().length(64), approved_by: z.string().min(1).max(200), reason: z.string().max(2000).optional() }, annotations: write,
   }, async ({ case_id, plan_hash, approved_by, reason }) => text(recordApproval(case_id, plan_hash, approved_by, reason)));
 
   server.registerTool('certificate_record', {
-    description: 'Record an execution certificate after downstream systems have safely executed the approved plan.',
+    description: 'Record an execution certificate only for the latest approved plan and unchanged case revision.',
     inputSchema: { case_id: caseId, plan_hash: z.string().length(64), approved_by: z.string().min(1).max(200), manifest: z.array(z.any()).default([]), withheld: z.array(z.any()).default([]) }, annotations: write,
   }, async ({ case_id, plan_hash, approved_by, manifest, withheld }) => text(executeCertificate({ caseId: case_id, planHash: plan_hash, approvedBy: approved_by, manifest, withheld })));
 
