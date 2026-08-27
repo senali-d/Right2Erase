@@ -1,33 +1,28 @@
-# Right2Erase
+# Oubliette
 
-## Setup
+A safety-first, multi-system erasure demo. ShopKart is a deterministic fake company; an agent must discover personal data across Postgres, MinIO, logs, and billing, preserve a live refund, and execute only a reviewed plan.
 
-The repository includes a Makefile for preparing the demo fixture. Make sure
-Docker and Node.js/npm are installed, then run:
+## Quick start
 
-```bash
-make setup
-```
-
-`make setup` installs the fixture dependencies, starts the Docker services, and
-seeds the database. It is equivalent to:
+Requirements: Docker and Node.js 20+.
 
 ```bash
-cd fixture && npm install && npm run up && npm run seed
+./scripts/setup.sh
+# or: npm run setup
+npm run truth
 ```
 
-To start the billing MCP server with streamable HTTP transport, use:
+Reset between demo takes:
 
 ```bash
-make mcp-billing-http
+./scripts/demo-reset.sh
 ```
 
-This is equivalent to `cd fixture && npm run mcp:billing:http`.
+## Repository
 
-To reset the fixture between runs, use:
+- `fixture/` — ShopKart services, schema, seed data, and operator-only truth checker
+- `docs/` — architecture and capability map
 
-```bash
-make reset
-```
+## Existing compatibility commands
 
-## Qodo Code Review Evidence
+From `fixture/`: `npm run up`, `npm run seed`, `npm run truth`, `npm run reset`, and `npm run mcp:billing:http` remain available.

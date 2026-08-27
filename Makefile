@@ -1,10 +1,13 @@
-.PHONY: setup reset mcp-billing-http
+.PHONY: setup reset mcp-billing-http test
 
 setup:
-	cd fixture && npm install && npm run up && npm run seed
+	./scripts/setup.sh
 
 reset:
-	cd fixture && npm run reset
+	./scripts/demo-reset.sh
 
 mcp-billing-http:
 	cd fixture && npm run mcp:billing:http
+
+test:
+	npm test
