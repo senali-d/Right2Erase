@@ -60,6 +60,10 @@ db.exec(`
     withheld TEXT NOT NULL DEFAULT '[]',
     executed_at TEXT NOT NULL
   );
+  CREATE TRIGGER IF NOT EXISTS certificates_immutable_update
+    BEFORE UPDATE ON certificates BEGIN SELECT RAISE(ABORT, 'certificates are immutable'); END;
+  CREATE TRIGGER IF NOT EXISTS certificates_immutable_delete
+    BEFORE DELETE ON certificates BEGIN SELECT RAISE(ABORT, 'certificates are immutable'); END;
 `);
 
 // Keep databases created before revision tracking readable. Existing plans and
@@ -112,8 +116,10 @@ export function createCase({ id, subject_email, subject_name }) {
 function mutableCase(caseId) {
   const subject = db.prepare('SELECT * FROM cases WHERE id = ?').get(caseId);
   if (!subject) throw new Error(`case not found: ${caseId}`);
-  if (subject.status === 'completed' || db.prepare('SELECT 1 FROM certificates WHERE case_id = ?').get(caseId)) {
-    throw new Error('case is terminal and cannot be modified');
+  if (subject.status === 'completed' || subject.status === 'executing' || db.prepare('SELECT 1 FROM certificates WHERE case_id = ?').get(caseId)) {
+    throw new Error(subject.status === 'executing'
+      ? 'case is executing and cannot be modified'
+      : 'case is terminal and cannot be modified');
   }
   return subject;
 }

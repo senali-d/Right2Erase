@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { startHttpMcp } from '../mcp/http-transport.js';
 import { addFinding, close, createCase, getCase, listCases, recordApproval, savePlan } from './db.js';
 import { executeCertificate } from './erasure.js';
+import { oublietteExecuteErasure } from './execution.js';
 import { buildPlan, hashPlan } from './plan.js';
 
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
@@ -66,6 +67,17 @@ function createServer() {
     description: 'Record human approval for the latest plan at the current case revision. Terminal cases cannot be mutated and older plan hashes cannot be approved.',
     inputSchema: { case_id: caseId, plan_hash: z.string().length(64), approved_by: z.string().min(1).max(200), reason: z.string().max(2000).optional() }, annotations: write,
   }, async ({ case_id, plan_hash, approved_by, reason }) => text(recordApproval(case_id, plan_hash, approved_by, reason)));
+
+  server.registerTool('oubliette_execute_erasure', {
+    description: 'The sole Oubliette-owned destructive entry point. Validates the current canonical, approved plan and executes its erase actions through the configured database, MinIO, and billing interfaces. Retain/review actions are withheld and included in the immutable certificate.',
+    inputSchema: {
+      case_id: caseId,
+      plan_hash: z.string().length(64),
+      approved_by: z.string().min(1).max(200),
+    }, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+  }, async ({ case_id, plan_hash, approved_by }) => text(await oublietteExecuteErasure({
+    caseId: case_id, planHash: plan_hash, approvedBy: approved_by,
+  })));
 
   server.registerTool('certificate_record', {
     description: 'Record an execution certificate only for the latest approved plan and unchanged case revision.',

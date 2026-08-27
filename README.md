@@ -46,7 +46,11 @@ MCP_TRANSPORT=http npm run mcp:oubliette:http  # http://127.0.0.1:4014/mcp
 
 The database defaults to `.oubliette/oubliette.db` and can be relocated with
 `OUBLIETTE_DB_PATH`. The intended workflow is `case_create` → `finding_add` →
-`plan_create` → human `plan_approve` → `certificate_record`.
+`plan_create` → human `plan_approve` → `oubliette_execute_erasure`. The execution
+tool is the sole destructive Oubliette entry point: it revalidates the canonical
+hash, approval identity, current revision, and withholds before calling injected
+database, MinIO, and billing interfaces. Those interfaces intentionally refuse
+until deployment wiring supplies safe, transactional adapters.
 
 ## Read-only discovery MCPs
 
