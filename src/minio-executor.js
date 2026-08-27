@@ -1,4 +1,5 @@
 import { hashPlan } from './plan.js';
+import { normalizeSystem } from './system.js';
 
 /**
  * The only destructive MinIO operation in the application.
@@ -73,7 +74,8 @@ function validateExecution({ plan, planHash, approval, postgresPhase, client, bu
 
 function objectActions(plan) {
   const seen = new Set();
-  return plan.actions.filter((action) => action?.system === 'minio' && action.disposition === 'erase').map((action) => {
+  return plan.actions.filter((action) => normalizeSystem(action?.system) === 'minio'
+    && action.disposition === 'erase').map((action) => {
     const key = objectKey(action.locator);
     if (!key) throw new Error('MinIO erase action must explicitly name an object key');
     if (seen.has(key)) throw new Error(`duplicate MinIO object in plan: ${key}`);

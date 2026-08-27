@@ -1,6 +1,7 @@
 import { db, hydrate, now } from './db.js';
 import { hashPlan, validateDeletionPlan } from './plan.js';
 import { validatePlanIntegrity } from './erasure.js';
+import { normalizeSystem } from './system.js';
 
 /**
  * Stable boundary for destructive system adapters. Adapters must make one call
@@ -14,13 +15,7 @@ export const executionInterfaces = Object.freeze({
   billing: async () => { throw new Error('billing execution interface is not configured'); },
 });
 
-const systemFor = (system) => {
-  const value = String(system).toLowerCase();
-  if (['postgres', 'postgresql', 'database', 'db'].includes(value)) return 'database';
-  if (['minio', 'storage', 's3'].includes(value)) return 'minio';
-  if (value === 'billing') return 'billing';
-  return null;
-};
+const systemFor = normalizeSystem;
 
 const databaseTableFor = new Map([
   ['order_item', 'order_items'], ['order_items', 'order_items'],

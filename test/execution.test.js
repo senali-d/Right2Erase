@@ -8,6 +8,7 @@ process.env.OUBLIETTE_DB_PATH = `${directory}/cases.db`;
 const { createCase, addFinding, savePlan, recordApproval, getCase, db, close } = await import('../src/db.js');
 const { buildPlan, hashPlan } = await import('../src/plan.js');
 const { oublietteExecuteErasure } = await import('../src/execution.js');
+const { createRealExecutionInterfaces } = await import('../src/mcp-server.js');
 const { executeCertificate } = await import('../src/erasure.js');
 
 function approvedCase(id, findings) {
@@ -48,6 +49,35 @@ test('orchestrates all systems and certifies withheld actions', async () => {
   assert.deepEqual(result.certificate.manifest.map((item) => item.system), ['postgres', 'minio', 'billing']);
   assert.equal(getCase('success').status, 'completed');
   assert.equal(db.prepare('SELECT status FROM execution_runs WHERE case_id = ? AND plan_hash = ?').get('success', planHash).status, 'completed');
+});
+
+test('normalizes every MinIO alias and case variant after the database phase commits', async () => {
+  const aliases = ['minio', 'MINIO', 'MiNiO', 'storage', 'STORAGE', 'StOrAgE', 's3', 'S3'];
+  const findings = [
+    { system: 'postgres', record_type: 'account', record_id: 21, disposition: 'erase' },
+    ...aliases.map((system, index) => ({
+      system, record_type: 'object', record_id: `uploads/alias-${index}`,
+      locator: `uploads/alias-${index}`, disposition: 'erase',
+    })),
+  ];
+  const { planHash } = approvedCase('minio-aliases', findings);
+  const removed = [];
+  const interfaces = createRealExecutionInterfaces({
+    postgresExecutor: { execute: async () => ({ deleted: 1 }) },
+    minioClient: { removeObject: async (bucket, key) => {
+      // The production adapter runs after the committed database phase.
+      assert.ok(db.prepare(`SELECT 1 FROM execution_phases
+        WHERE case_id = ? AND plan_hash = ? AND system = 'database'`).get('minio-aliases', planHash));
+      removed.push([bucket, key]);
+    } },
+  });
+
+  const result = await oublietteExecuteErasure({
+    caseId: 'minio-aliases', planHash, approvedBy: 'human@example.test', interfaces,
+  });
+  assert.deepEqual(removed, aliases.map((_, index) => ['shopkart-uploads', `uploads/alias-${index}`]));
+  assert.equal(result.certificate.manifest.length, findings.length);
+  assert.equal(getCase('minio-aliases').status, 'completed');
 });
 
 test('keeps certificate, case, and execution run terminal state consistent on SQLite finalization failure', async () => {
