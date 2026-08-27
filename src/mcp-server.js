@@ -7,7 +7,6 @@
  */
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
-import * as Minio from 'minio';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -15,7 +14,7 @@ import { startHttpMcp } from '../mcp/http-transport.js';
 import { addFinding, close, createCase, getCase, listCases, recordApproval, savePlan } from './db.js';
 import { executeBillingCleanup } from './billing-executor.js';
 import { oublietteExecuteErasure } from './execution.js';
-import { executeSandboxMinioDeletion } from './minio-executor.js';
+import { createSandboxMinioClient, executeSandboxMinioDeletion } from './minio-executor.js';
 import { createPostgresExecutor, normalizePostgresRecordType } from './postgres-executor.js';
 import { buildPlan, hashPlan } from './plan.js';
 
@@ -55,13 +54,7 @@ export function createRealExecutionInterfaces({
   };
   const getMinioClient = () => {
     if (minioClient === undefined) {
-      minioClient = new Minio.Client({
-        endPoint: process.env.MINIO_HOST || 'localhost',
-        port: Number(process.env.MINIO_PORT || 9000),
-        useSSL: process.env.MINIO_USE_SSL === 'true',
-        accessKey: process.env.MINIO_ACCESS_KEY || 'shopkart',
-        secretKey: process.env.MINIO_SECRET_KEY || 'shopkart123',
-      });
+      minioClient = createSandboxMinioClient();
     }
     return minioClient;
   };

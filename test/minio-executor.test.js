@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { hashPlan } from '../src/plan.js';
-import { executeSandboxMinioDeletion } from '../src/minio-executor.js';
+import { createSandboxMinioClient, executeSandboxMinioDeletion } from '../src/minio-executor.js';
 
 function fixture() {
   const plan = { case_id: 'case-1', actions: [
@@ -16,6 +16,21 @@ function fixture() {
 function approved(plan) {
   return { approved: true, plan_hash: hashPlan(plan) };
 }
+
+test('rejects default MinIO client construction in production', () => {
+  const previousNodeEnv = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    assert.throws(() => createSandboxMinioClient(), /MinIO deletion client is sandbox-only/);
+  } finally {
+    if (previousNodeEnv === undefined) delete process.env.NODE_ENV;
+    else process.env.NODE_ENV = previousNodeEnv;
+  }
+});
+
+test('rejects default MinIO clients aimed at non-local hosts', () => {
+  assert.throws(() => createSandboxMinioClient({ endPoint: 'minio.example.test' }), /non-local MinIO target/);
+});
 
 test('deletes only erase MinIO actions after PostgreSQL succeeds', async () => {
   const { plan, removed, client } = fixture();
