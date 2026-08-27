@@ -92,6 +92,11 @@ server.tool(
   return server;
 }
 
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 let server = createServer();
 
 if (process.env.MCP_TRANSPORT === 'http') {
@@ -115,6 +120,37 @@ if (process.env.MCP_TRANSPORT === 'http') {
 
   const app = express();
   const transports = new Map();
+  const sessionTimers = new Map();
+  const sessionIdleTtlMs = positiveInteger(process.env.MCP_SESSION_TTL_MS, 5 * 60 * 1000);
+  const maxSessions = positiveInteger(process.env.MCP_MAX_SESSIONS, 100);
+  let pendingInitializations = 0;
+  let shuttingDown = false;
+
+  function refreshSession(id, transport) {
+    const previousTimer = sessionTimers.get(id);
+    if (previousTimer) clearTimeout(previousTimer);
+
+    const timer = setTimeout(async () => {
+      if (transports.get(id) !== transport) return;
+      transports.delete(id);
+      sessionTimers.delete(id);
+      try {
+        await transport.close();
+      } catch (error) {
+        console.error(`Failed to close idle MCP session ${id}:`, error);
+      }
+    }, sessionIdleTtlMs);
+    timer.unref?.();
+    sessionTimers.set(id, timer);
+  }
+
+  async function closeAllSessions() {
+    const activeTransports = [...transports.values()];
+    await Promise.allSettled(activeTransports.map((transport) => transport.close()));
+    transports.clear();
+    for (const timer of sessionTimers.values()) clearTimeout(timer);
+    sessionTimers.clear();
+  }
 
   // Keep the security checks ahead of every MCP method, including session
   // creation. Requests without an Origin are allowed for non-browser MCP
@@ -140,14 +176,36 @@ if (process.env.MCP_TRANSPORT === 'http') {
 
     try {
       if (!transport && !requestedSession && req.body?.method === 'initialize') {
+        if (transports.size + pendingInitializations >= maxSessions) {
+          res.status(503).json({ error: 'MCP session limit reached' });
+          return;
+        }
+
+        pendingInitializations += 1;
+        let initialized = false;
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
-          onsessioninitialized: (id) => transports.set(id, transport),
+          onsessioninitialized: (id) => {
+            initialized = true;
+            pendingInitializations -= 1;
+            transports.set(id, transport);
+            refreshSession(id, transport);
+          },
         });
         transport.onclose = () => {
-          if (transport.sessionId) transports.delete(transport.sessionId);
+          const id = transport.sessionId;
+          if (id && transports.get(id) === transport) transports.delete(id);
+          if (id && sessionTimers.has(id)) {
+            clearTimeout(sessionTimers.get(id));
+            sessionTimers.delete(id);
+          }
         };
-        await createServer().connect(transport);
+        try {
+          await createServer().connect(transport);
+        } catch (error) {
+          if (!initialized) pendingInitializations -= 1;
+          throw error;
+        }
       }
 
       if (!transport) {
@@ -156,6 +214,7 @@ if (process.env.MCP_TRANSPORT === 'http') {
         });
         return;
       }
+      if (transport.sessionId) refreshSession(transport.sessionId, transport);
       await transport.handleRequest(req, res, req.body);
     } catch (error) {
       console.error('MCP HTTP error:', error);
@@ -170,13 +229,27 @@ if (process.env.MCP_TRANSPORT === 'http') {
         res.status(400).send('Invalid or missing MCP session');
         return;
       }
+      if (transport.sessionId) refreshSession(transport.sessionId, transport);
       await transport.handleRequest(req, res);
     });
   }
 
-  app.listen(port, host, () => {
+  const httpServer = app.listen(port, host, () => {
     console.error(`Billing MCP HTTP server listening at http://${host}:${port}/mcp`);
   });
+
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    await closeAllSessions();
+    await new Promise((resolve) => httpServer.close(resolve));
+  };
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.once(signal, () => shutdown().catch((error) => {
+      console.error('MCP shutdown error:', error);
+      process.exitCode = 1;
+    }));
+  }
 } else {
   await server.connect(new StdioServerTransport());
 }
