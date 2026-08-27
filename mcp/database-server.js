@@ -12,6 +12,7 @@ const pool = new pg.Pool({
 });
 const result = (rows) => ({ content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] });
 const ids = z.array(z.coerce.number().int().positive()).min(1).max(500);
+const escapeLike = (value) => value.replace(/[\\%_]/g, '\\$&');
 
 function createServer() {
   const server = new McpServer({ name: 'shopkart-db', version: '1.0.0' });
@@ -59,10 +60,11 @@ function createServer() {
     account_id: z.coerce.number().int().positive().optional(), object_prefix: z.string().min(1).max(300).optional(),
   }, async ({ account_id, object_prefix }) => {
     if (account_id == null && !object_prefix) throw new Error('account_id or object_prefix is required');
+    const escapedPrefix = object_prefix ? escapeLike(object_prefix) : null;
     const { rows } = await pool.query(
       `SELECT id, account_id, object_key, kind, bytes, created_at FROM uploads
-       WHERE ($1::int IS NOT NULL AND account_id=$1) OR ($2::text IS NOT NULL AND object_key LIKE $2 || '%') ORDER BY id`,
-      [account_id ?? null, object_prefix ?? null],
+       WHERE ($1::int IS NOT NULL AND account_id=$1) OR ($2::text IS NOT NULL AND object_key LIKE $2 || '%' ESCAPE '\\') ORDER BY id`,
+      [account_id ?? null, escapedPrefix],
     );
     return result(rows);
   });
