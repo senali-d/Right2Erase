@@ -83,7 +83,7 @@ async function main() {
   // ---------------------------------------------------------------- schema
   const { readFile } = await import('node:fs/promises');
   const { fileURLToPath } = await import('node:url');
-  const schemaPath = fileURLToPath(new URL('./schema.sql', import.meta.url));
+  const schemaPath = fileURLToPath(new URL('../db/schema.sql', import.meta.url));
   await client.query(await readFile(schemaPath, 'utf8'));
   log('  schema applied');
 

@@ -1,0 +1,17 @@
+{
+  "name": "oubliette",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": ["fixture"],
+  "scripts": {
+    "setup": "npm install && npm run up && npm run seed",
+    "up": "docker compose up -d --wait",
+    "down": "docker compose down -v",
+    "seed": "npm --workspace fixture run seed",
+    "truth": "npm --workspace fixture run truth",
+    "reset": "npm run down && npm run up && npm run seed",
+    "test": "npm --workspaces run test --if-present"
+  },
+  "engines": { "node": ">=20" }
+}

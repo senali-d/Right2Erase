@@ -5,12 +5,12 @@
   "type": "module",
   "description": "A fake company for the erasure agent to work on. All data is generated.",
   "scripts": {
-    "up": "docker compose up -d --wait",
-    "down": "docker compose down -v",
+    "up": "docker compose -f ../docker-compose.yml up -d --wait",
+    "down": "docker compose -f ../docker-compose.yml down -v",
     "seed": "node scripts/seed.js",
     "truth": "node scripts/truth.js",
-    "mcp:billing": "node billing-api/mcp-server.js",
-    "mcp:billing:http": "MCP_TRANSPORT=http MCP_PORT=4011 node billing-api/mcp-server.js",
+    "mcp:billing": "node ../mcp/billing-server.js",
+    "mcp:billing:http": "MCP_TRANSPORT=http MCP_PORT=4011 node ../mcp/billing-server.js",
     "reset": "npm run down && npm run up && npm run seed"
   },
   "dependencies": {
