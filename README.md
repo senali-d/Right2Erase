@@ -13,10 +13,16 @@ make setup
 seeds the database. It is equivalent to:
 
 ```bash
-cd fixture && npm install
-cd fixture && npm run up
-cd fixture && npm run seed
+cd fixture && npm install && npm run up && npm run seed
 ```
+
+To start the billing MCP server with streamable HTTP transport, use:
+
+```bash
+make mcp-billing-http
+```
+
+This is equivalent to `cd fixture && npm run mcp:billing:http`.
 
 To reset the fixture between runs, use:
 
