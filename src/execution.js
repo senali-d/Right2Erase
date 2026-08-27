@@ -85,6 +85,22 @@ function confirmedActions(system, actions, result) {
   throw new Error(`${system} execution did not return confirmed deletions`);
 }
 
+function loadExecutionPhase(caseId, planHash, system) {
+  const row = db.prepare(`SELECT result, manifest FROM execution_phases
+    WHERE case_id = ? AND plan_hash = ? AND system = ?`).get(caseId, planHash, system);
+  if (!row) return null;
+  return { result: JSON.parse(row.result), manifest: JSON.parse(row.manifest) };
+}
+
+function saveExecutionPhase(caseId, planHash, system, result, manifest) {
+  db.prepare(`INSERT INTO execution_phases
+    (case_id, plan_hash, system, result, manifest, completed_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(case_id, plan_hash, system) DO UPDATE SET
+      result = excluded.result, manifest = excluded.manifest, completed_at = excluded.completed_at`)
+    .run(caseId, planHash, system, JSON.stringify(result ?? null), JSON.stringify(manifest), now());
+}
+
 function readExecutionState(caseId, planHash, approvedBy) {
   const subject = db.prepare('SELECT * FROM cases WHERE id = ?').get(caseId);
   if (!subject) throw new Error(`case not found: ${caseId}`);
@@ -179,8 +195,21 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
   const timestamp = now();
   db.transaction(() => {
     const current = db.prepare('SELECT * FROM cases WHERE id = ?').get(caseId);
-    if (!current || current.revision !== initial.subject.revision || current.status === 'completed') {
-      throw new Error('case changed before execution; refusing to execute');
+    if (!current || current.revision !== initial.subject.revision
+        || !['approved', 'failed'].includes(current.status)) {
+      throw new Error(current?.status === 'executing'
+        ? 'case is already executing'
+        : 'case changed before execution; refusing to execute');
+    }
+    const run = db.prepare('SELECT * FROM execution_runs WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash);
+    if (run?.status === 'executing') throw new Error('case is already executing');
+    if (run?.status === 'completed') throw new Error('execution has already completed for this plan');
+    if (run) {
+      db.prepare('UPDATE execution_runs SET status = \'executing\', approved_by = ?, updated_at = ? WHERE id = ?')
+        .run(approvedBy, timestamp, run.id);
+    } else {
+      db.prepare(`INSERT INTO execution_runs (case_id, plan_hash, approved_by, status, created_at, updated_at)
+        VALUES (?, ?, ?, 'executing', ?, ?)`).run(caseId, planHash, approvedBy, timestamp, timestamp);
     }
     db.prepare("UPDATE cases SET status = 'executing', updated_at = ? WHERE id = ?").run(timestamp, caseId);
   })();
@@ -191,19 +220,35 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
     for (const name of ['database', 'minio', 'billing']) {
       const execute = interfaces?.[name];
       if (grouped[name].length && typeof execute !== 'function') throw new Error(`${name} execution interface is not configured`);
+      const savedPhase = loadExecutionPhase(caseId, planHash, name);
+      if (savedPhase) {
+        confirmedManifest.push(...savedPhase.manifest);
+        systems[name] = { ok: true, result: savedPhase.result, resumed: true };
+        continue;
+      }
       if (!grouped[name].length) {
+        saveExecutionPhase(caseId, planHash, name, null, []);
         systems[name] = { ok: true, result: null, skipped: true };
         continue;
       }
       const result = await execute({ case_id: caseId, plan_hash: planHash, actions: grouped[name] });
-      confirmedManifest.push(...confirmedActions(name, grouped[name], result));
+      const confirmed = confirmedActions(name, grouped[name], result);
+      saveExecutionPhase(caseId, planHash, name, result, confirmed);
+      confirmedManifest.push(...confirmed);
       systems[name] = { ok: true, result };
     }
     const certificate = recordExecutionCertificate({ caseId, planHash, approvedBy,
       manifest: confirmedManifest, withheld });
+    db.prepare("UPDATE execution_runs SET status = 'completed', updated_at = ? WHERE case_id = ? AND plan_hash = ? AND status = 'executing'")
+      .run(now(), caseId, planHash);
     return { case_id: caseId, plan_hash: planHash, approved_by: approvedBy, systems, withheld, certificate };
   } catch (error) {
-    db.prepare("UPDATE cases SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'executing'").run(now(), caseId);
+    const failedAt = now();
+    db.transaction(() => {
+      db.prepare("UPDATE cases SET status = 'failed', updated_at = ? WHERE id = ? AND status = 'executing'").run(failedAt, caseId);
+      db.prepare("UPDATE execution_runs SET status = 'failed', updated_at = ? WHERE case_id = ? AND plan_hash = ? AND status = 'executing'")
+        .run(failedAt, caseId, planHash);
+    })();
     throw error;
   }
 }

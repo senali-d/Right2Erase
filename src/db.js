@@ -64,6 +64,25 @@ db.exec(`
     BEFORE UPDATE ON certificates BEGIN SELECT RAISE(ABORT, 'certificates are immutable'); END;
   CREATE TRIGGER IF NOT EXISTS certificates_immutable_delete
     BEFORE DELETE ON certificates BEGIN SELECT RAISE(ABORT, 'certificates are immutable'); END;
+  CREATE TABLE IF NOT EXISTS execution_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    plan_hash TEXT NOT NULL,
+    approved_by TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('executing','failed','completed')),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(case_id, plan_hash)
+  );
+  CREATE TABLE IF NOT EXISTS execution_phases (
+    case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+    plan_hash TEXT NOT NULL,
+    system TEXT NOT NULL,
+    result TEXT NOT NULL,
+    manifest TEXT NOT NULL,
+    completed_at TEXT NOT NULL,
+    PRIMARY KEY (case_id, plan_hash, system)
+  );
 `);
 
 // Keep databases created before revision tracking readable. Existing plans and

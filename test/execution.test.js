@@ -81,6 +81,29 @@ test('refuses an unapproved or non-canonical plan before adapters run', async ()
   assert.deepEqual(called, []);
 });
 
+test('resumes committed phases when a downstream phase fails', async () => {
+  const { planHash } = approvedCase('resume-after-failure', [
+    { system: 'postgres', record_type: 'account', record_id: 11, disposition: 'erase' },
+    { system: 'minio', record_type: 'object', record_id: 'uploads/retry', disposition: 'erase' },
+  ]);
+  await assert.rejects(oublietteExecuteErasure({
+    caseId: 'resume-after-failure', planHash, approvedBy: 'human@example.test', interfaces: {
+      database: async () => ({ deleted: 1 }),
+      minio: async () => { throw new Error('downstream unavailable'); },
+    },
+  }), /downstream unavailable/);
+
+  const result = await oublietteExecuteErasure({
+    caseId: 'resume-after-failure', planHash, approvedBy: 'human@example.test', interfaces: {
+      database: async () => { throw new Error('database must not be repeated'); },
+      minio: async () => ({ deleted: 1 }),
+    },
+  });
+  assert.equal(result.systems.database.resumed, true);
+  assert.equal(result.systems.minio.ok, true);
+  assert.deepEqual(result.certificate.manifest.map((item) => item.system), ['postgres', 'minio']);
+});
+
 test('does not run downstream systems after PostgreSQL failure and marks execution failed', async () => {
   const { planHash } = approvedCase('postgres-failure', [
     { system: 'postgres', record_type: 'account', record_id: 8, disposition: 'erase' },
