@@ -68,6 +68,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
     plan_hash TEXT NOT NULL,
+    approval_id INTEGER NOT NULL REFERENCES approvals(id),
     approved_by TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('executing','failed','completed')),
     created_at TEXT NOT NULL,
@@ -115,8 +116,22 @@ const addColumn = (table, definition) => {
 addColumn('cases', 'revision INTEGER NOT NULL DEFAULT 0');
 const plansMigrated = addColumn('plans', 'case_revision INTEGER NOT NULL DEFAULT 0');
 const approvalsMigrated = addColumn('approvals', 'case_revision INTEGER NOT NULL DEFAULT -1');
+const executionApprovalsMigrated = addColumn('execution_runs', 'approval_id INTEGER REFERENCES approvals(id)');
 if (plansMigrated || approvalsMigrated) {
   db.exec('UPDATE plans SET case_revision = -1; UPDATE approvals SET case_revision = -1;');
+}
+if (executionApprovalsMigrated) {
+  db.exec(`UPDATE execution_runs
+    SET approval_id = (
+      SELECT approvals.id FROM approvals
+      JOIN cases ON cases.id = execution_runs.case_id
+      WHERE approvals.case_id = execution_runs.case_id
+        AND approvals.plan_hash = execution_runs.plan_hash
+        AND approvals.case_revision = cases.revision
+        AND approvals.approved_by = execution_runs.approved_by
+      ORDER BY approvals.id DESC LIMIT 1
+    )
+    WHERE approval_id IS NULL`);
 }
 
 export const now = () => new Date().toISOString();
@@ -194,6 +209,9 @@ export function savePlan(caseId, body, planHash, expectedRevision) {
 export function recordApproval(caseId, planHash, approvedBy, reason) {
   const transaction = db.transaction(() => {
     const subject = mutableCase(caseId);
+    if (db.prepare("SELECT 1 FROM execution_runs WHERE case_id = ? AND status = 'executing'").get(caseId)) {
+      throw new Error('case is executing and cannot be modified');
+    }
     const plan = db.prepare('SELECT * FROM plans WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash);
     const latest = db.prepare('SELECT * FROM plans WHERE case_id = ? ORDER BY version DESC LIMIT 1').get(caseId);
     if (!plan) throw new Error('plan hash does not match a stored plan for this case');

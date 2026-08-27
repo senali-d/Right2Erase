@@ -135,22 +135,25 @@ function readExecutionState(caseId, planHash, approvedBy) {
 // This writer is intentionally module-private. The MCP layer and callers of
 // erasure.js cannot manufacture a certificate; only this workflow can invoke
 // it after its execution claim and adapter phases have completed.
-function recordExecutionCertificate({ caseId, planHash, approvedBy, manifest = [], withheld = [] }) {
+function recordExecutionCertificate({ caseId, planHash, manifest = [], withheld = [] }) {
   const timestamp = now();
   const transaction = db.transaction(() => {
     const subject = db.prepare('SELECT * FROM cases WHERE id = ?').get(caseId);
     if (!subject) throw new Error(`case not found: ${caseId}`);
     if (subject.status !== 'executing') throw new Error('certificate requires an active execution claim');
+    const run = db.prepare(`SELECT * FROM execution_runs
+      WHERE case_id = ? AND plan_hash = ? AND status = 'executing'`).get(caseId, planHash);
+    if (!run?.approval_id) throw new Error('execution run is not bound to an approval');
     const plan = validatePlanIntegrity({ caseId, planHash });
     const latestPlan = db.prepare('SELECT * FROM plans WHERE case_id = ? ORDER BY version DESC LIMIT 1').get(caseId);
     if (!latestPlan || latestPlan.id !== plan.id || plan.case_revision !== subject.revision) {
       throw new Error('plan is stale; create and approve a new plan for the current case revision');
     }
     const approval = db.prepare(`SELECT * FROM approvals
-      WHERE case_id = ? AND plan_hash = ? AND case_revision = ?
-      ORDER BY id DESC LIMIT 1`).get(caseId, planHash, subject.revision);
-    if (!approval) throw new Error('the current plan has not been approved');
-    if (approval.approved_by !== approvedBy) throw new Error('approved_by does not match the approving identity');
+      WHERE id = ? AND case_id = ? AND plan_hash = ? AND case_revision = ?`)
+      .get(run.approval_id, caseId, planHash, subject.revision);
+    if (!approval) throw new Error('the execution approval is no longer valid for the current plan');
+    if (approval.approved_by !== run.approved_by) throw new Error('execution approval identity does not match the claimed identity');
     if (db.prepare('SELECT 1 FROM certificates WHERE case_id = ?').get(caseId)) {
       throw new Error('case already has a certificate');
     }
@@ -163,12 +166,12 @@ function recordExecutionCertificate({ caseId, planHash, approvedBy, manifest = [
     validateDeletionPlan(reviewedPlan, manifest, withheld);
 
     db.prepare(`INSERT INTO certificates (case_id, plan_hash, approved_by, manifest, withheld, executed_at)
-      VALUES (?, ?, ?, ?, ?, ?)`).run(caseId, planHash, approvedBy, JSON.stringify(manifest), JSON.stringify(withheld), timestamp);
+      VALUES (?, ?, ?, ?, ?, ?)`).run(caseId, planHash, approval.approved_by, JSON.stringify(manifest), JSON.stringify(withheld), timestamp);
     const completedCase = db.prepare("UPDATE cases SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'executing'")
       .run(timestamp, caseId);
     if (completedCase.changes !== 1) throw new Error('case completion failed');
-    const completedRun = db.prepare("UPDATE execution_runs SET status = 'completed', updated_at = ? WHERE case_id = ? AND plan_hash = ? AND status = 'executing'")
-      .run(timestamp, caseId, planHash);
+    const completedRun = db.prepare("UPDATE execution_runs SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'executing'")
+      .run(timestamp, run.id);
     if (completedRun.changes !== 1) throw new Error('execution run completion failed');
   });
   transaction();
@@ -205,12 +208,18 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
     }
     if (run?.status === 'executing') throw new Error('case is already executing');
     if (run?.status === 'completed') throw new Error('execution has already completed for this plan');
+    const approval = db.prepare(`SELECT * FROM approvals
+      WHERE id = ? AND case_id = ? AND plan_hash = ? AND case_revision = ?`)
+      .get(initial.approval.id, caseId, planHash, initial.subject.revision);
+    if (!approval || approval.approved_by !== approvedBy) {
+      throw new Error('approval changed before execution; refusing to execute');
+    }
     if (run) {
-      db.prepare('UPDATE execution_runs SET status = \'executing\', approved_by = ?, updated_at = ? WHERE id = ?')
-        .run(approvedBy, timestamp, run.id);
+      db.prepare('UPDATE execution_runs SET status = \'executing\', approval_id = ?, approved_by = ?, updated_at = ? WHERE id = ?')
+        .run(approval.id, approval.approved_by, timestamp, run.id);
     } else {
-      db.prepare(`INSERT INTO execution_runs (case_id, plan_hash, approved_by, status, created_at, updated_at)
-        VALUES (?, ?, ?, 'executing', ?, ?)`).run(caseId, planHash, approvedBy, timestamp, timestamp);
+      db.prepare(`INSERT INTO execution_runs (case_id, plan_hash, approval_id, approved_by, status, created_at, updated_at)
+        VALUES (?, ?, ?, ?, 'executing', ?, ?)`).run(caseId, planHash, approval.id, approval.approved_by, timestamp, timestamp);
     }
     db.prepare("UPDATE cases SET status = 'executing', updated_at = ? WHERE id = ?").run(timestamp, caseId);
   })();
@@ -258,9 +267,9 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
       confirmedManifest.push(...confirmed);
       systems[name] = { ok: true, result };
     }
-    const certificate = recordExecutionCertificate({ caseId, planHash, approvedBy,
+    const certificate = recordExecutionCertificate({ caseId, planHash,
       manifest: confirmedManifest, withheld });
-    return { case_id: caseId, plan_hash: planHash, approved_by: approvedBy, systems, withheld, certificate };
+    return { case_id: caseId, plan_hash: planHash, approved_by: initial.approval.approved_by, systems, withheld, certificate };
   } catch (error) {
     const failedAt = now();
     db.transaction(() => {

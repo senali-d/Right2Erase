@@ -5,7 +5,7 @@ import os from 'node:os';
 
 const directory = fs.mkdtempSync(`${os.tmpdir()}/oubliette-test-`);
 process.env.OUBLIETTE_DB_PATH = `${directory}/cases.db`;
-const { createCase, addFinding, savePlan, recordApproval, getCase, db, close } = await import('../src/db.js');
+const { createCase, addFinding, savePlan, recordApproval, getCase, db, now, close } = await import('../src/db.js');
 const { buildPlan, hashPlan } = await import('../src/plan.js');
 const { oublietteExecuteErasure } = await import('../src/execution.js');
 const { createRealExecutionInterfaces } = await import('../src/mcp-server.js');
@@ -206,6 +206,72 @@ test('rejects a second execution while the first claim is active', async () => {
   );
   release();
   await first;
+});
+
+test('rejects a new approval while an execution run is active', async () => {
+  const { planHash } = approvedCase('approval-concurrency', [
+    { system: 'billing', record_type: 'customer', record_id: 'cus_approval-concurrency', disposition: 'erase' },
+  ]);
+  let entered;
+  const enteredPromise = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const releasePromise = new Promise((resolve) => { release = resolve; });
+  const first = oublietteExecuteErasure({
+    caseId: 'approval-concurrency', planHash, approvedBy: 'human@example.test',
+    interfaces: { billing: async () => {
+      entered();
+      await releasePromise;
+      return { deleted: 1 };
+    } },
+  });
+  await enteredPromise;
+
+  assert.throws(
+    () => recordApproval('approval-concurrency', planHash, 'new-human@example.test', 're-reviewed'),
+    /case is executing and cannot be modified/,
+  );
+  assert.equal(getCase('approval-concurrency').approvals.length, 1);
+
+  release();
+  const result = await first;
+  assert.equal(result.certificate.approved_by, 'human@example.test');
+});
+
+test('binds the certificate to the claimed approval record, not a later approval row', async () => {
+  const { planHash } = approvedCase('approval-binding', [
+    { system: 'billing', record_type: 'customer', record_id: 'cus_approval-binding', disposition: 'erase' },
+  ]);
+  const originalApproval = getCase('approval-binding').approvals.at(-1);
+  let entered;
+  const enteredPromise = new Promise((resolve) => { entered = resolve; });
+  let release;
+  const releasePromise = new Promise((resolve) => { release = resolve; });
+  const first = oublietteExecuteErasure({
+    caseId: 'approval-binding', planHash, approvedBy: 'human@example.test',
+    interfaces: { billing: async () => {
+      entered();
+      await releasePromise;
+      return { deleted: 1 };
+    } },
+  });
+  await enteredPromise;
+
+  const run = db.prepare('SELECT approval_id FROM execution_runs WHERE case_id = ? AND plan_hash = ?')
+    .get('approval-binding', planHash);
+  assert.equal(run.approval_id, originalApproval.id);
+  db.prepare(`INSERT INTO approvals
+    (case_id, plan_hash, case_revision, approved_by, reason, approved_at)
+    VALUES (?, ?, ?, ?, ?, ?)`).run(
+    'approval-binding', planHash, originalApproval.case_revision,
+    'new-human@example.test', 'concurrent approval', now(),
+  );
+
+  release();
+  const result = await first;
+  assert.equal(result.certificate.approved_by, 'human@example.test');
+  assert.equal(getCase('approval-binding').certificate.approved_by, 'human@example.test');
+  assert.equal(db.prepare('SELECT approval_id FROM execution_runs WHERE case_id = ? AND plan_hash = ?')
+    .get('approval-binding', planHash).approval_id, originalApproval.id);
 });
 
 test('resumes committed phases when a downstream phase fails', async () => {
