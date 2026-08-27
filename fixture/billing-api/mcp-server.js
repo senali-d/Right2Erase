@@ -121,6 +121,7 @@ if (process.env.MCP_TRANSPORT === 'http') {
   const app = express();
   const transports = new Map();
   const sessionTimers = new Map();
+  const pendingInitializationTransports = new Set();
   const activeRequests = new Map();
   const sessionIdleTtlMs = positiveInteger(process.env.MCP_SESSION_TTL_MS, 5 * 60 * 1000);
   const maxSessions = positiveInteger(process.env.MCP_MAX_SESSIONS, 100);
@@ -148,6 +149,9 @@ if (process.env.MCP_TRANSPORT === 'http') {
   }
 
   async function closeAllSessions() {
+    const pending = [...pendingInitializationTransports];
+    await Promise.allSettled(pending.map((transport) => transport.close()));
+
     const sessions = [...transports.values()];
     await Promise.allSettled(sessions.map((transport) => transport.close()));
     transports.clear();
@@ -191,6 +195,10 @@ if (process.env.MCP_TRANSPORT === 'http') {
       res.status(401).set('WWW-Authenticate', 'Bearer').json({ error: 'Unauthorized' });
       return;
     }
+    if (shuttingDown) {
+      res.status(503).json({ error: 'MCP server is shutting down' });
+      return;
+    }
     next();
   });
   app.use(express.json());
@@ -206,6 +214,7 @@ if (process.env.MCP_TRANSPORT === 'http') {
       if (provisionalInitialization && !pendingInitializationReleased) {
         pendingInitializationReleased = true;
         pendingInitializations -= 1;
+        pendingInitializationTransports.delete(transport);
       }
     };
 
@@ -221,12 +230,20 @@ if (process.env.MCP_TRANSPORT === 'http') {
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id) => {
-            initialized = true;
             releasePendingInitialization();
+            if (shuttingDown) {
+              initialized = true;
+              void transport.close().catch((error) => {
+                console.error('Failed to close MCP transport initialized during shutdown:', error);
+              });
+              return;
+            }
+            initialized = true;
             transports.set(id, transport);
             refreshSession(id, transport);
           },
         });
+        pendingInitializationTransports.add(transport);
         transport.onclose = () => {
           const id = transport.sessionId;
           if (id && transports.get(id) === transport) transports.delete(id);
@@ -249,8 +266,11 @@ if (process.env.MCP_TRANSPORT === 'http') {
       console.error('MCP HTTP error:', error);
       if (!res.headersSent) res.status(500).json({ error: 'MCP request failed' });
     } finally {
-      if (provisionalInitialization && !initialized) {
+      if (provisionalInitialization) {
         releasePendingInitialization();
+        pendingInitializationTransports.delete(transport);
+      }
+      if (provisionalInitialization && !initialized) {
         try {
           await transport.close();
         } catch (error) {
