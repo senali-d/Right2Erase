@@ -173,6 +173,16 @@ if (process.env.MCP_TRANSPORT === 'http') {
   app.post('/mcp', async (req, res) => {
     const requestedSession = req.headers['mcp-session-id'];
     let transport = requestedSession ? transports.get(requestedSession) : undefined;
+    let provisionalInitialization = false;
+    let initialized = false;
+    let pendingInitializationReleased = false;
+
+    const releasePendingInitialization = () => {
+      if (provisionalInitialization && !pendingInitializationReleased) {
+        pendingInitializationReleased = true;
+        pendingInitializations -= 1;
+      }
+    };
 
     try {
       if (!transport && !requestedSession && req.body?.method === 'initialize') {
@@ -182,12 +192,12 @@ if (process.env.MCP_TRANSPORT === 'http') {
         }
 
         pendingInitializations += 1;
-        let initialized = false;
+        provisionalInitialization = true;
         transport = new StreamableHTTPServerTransport({
           sessionIdGenerator: () => randomUUID(),
           onsessioninitialized: (id) => {
             initialized = true;
-            pendingInitializations -= 1;
+            releasePendingInitialization();
             transports.set(id, transport);
             refreshSession(id, transport);
           },
@@ -219,6 +229,15 @@ if (process.env.MCP_TRANSPORT === 'http') {
     } catch (error) {
       console.error('MCP HTTP error:', error);
       if (!res.headersSent) res.status(500).json({ error: 'MCP request failed' });
+    } finally {
+      if (provisionalInitialization && !initialized) {
+        releasePendingInitialization();
+        try {
+          await transport.close();
+        } catch (error) {
+          console.error('Failed to close unsuccessful MCP initialization:', error);
+        }
+      }
     }
   });
 
