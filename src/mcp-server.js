@@ -16,7 +16,7 @@ import { addFinding, close, createCase, getCase, listCases, recordApproval, save
 import { executeBillingCleanup } from './billing-executor.js';
 import { oublietteExecuteErasure } from './execution.js';
 import { executeSandboxMinioDeletion } from './minio-executor.js';
-import { createPostgresExecutor } from './postgres-executor.js';
+import { createPostgresExecutor, normalizePostgresRecordType } from './postgres-executor.js';
 import { buildPlan, hashPlan } from './plan.js';
 
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
@@ -69,7 +69,11 @@ export function createRealExecutionInterfaces({
   return Object.freeze({
     database: ({ plan, case_id, actions, withheld }) => getPostgresExecutor().execute({
       ...(plan || { case_id, actions }),
-      withhold: withheld,
+      withhold: (withheld || []).map((record) => ({
+        ...record,
+        table: normalizePostgresRecordType(record?.record_type ?? record?.table),
+        id: record?.record_id ?? record?.id,
+      })),
     }),
     minio: ({ plan, planHash, plan_hash, approval, postgresPhase, withheld }) => executeSandboxMinioDeletion({
       plan, planHash: planHash || plan_hash, approval, postgresPhase,

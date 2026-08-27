@@ -32,10 +32,15 @@ const TABLE_ALIASES = new Map([
   ['retained_refund', 'retained_refunds'], ['retained_refunds', 'retained_refunds'],
 ]);
 
+export function normalizePostgresRecordType(recordType) {
+  if (typeof recordType !== 'string') return null;
+  return TABLE_ALIASES.get(recordType.toLowerCase()) || null;
+}
+
 function normalizePlan(plan) {
   if (!plan || !Array.isArray(plan.actions)) throw new Error('plan.actions must be an array');
   const withheld = Array.isArray(plan.withhold) ? plan.withhold : [];
-  const blocked = new Set(withheld.map((r) => `${r?.table}:${String(r?.id)}`));
+  const blocked = new Set(withheld.map((r) => `${normalizePostgresRecordType(r?.table) || r?.table}:${String(r?.id)}`));
   const targets = new Map(TABLES.map(([table]) => [table, []]));
   const seen = new Set();
 
@@ -47,7 +52,7 @@ function normalizePlan(plan) {
     if (action.disposition != null && action.disposition !== 'erase') {
       throw new Error(`unsupported action disposition: ${action.disposition}`);
     }
-    const table = TABLE_ALIASES.get(action.record_type);
+    const table = normalizePostgresRecordType(action.record_type);
     if (!table) throw new Error(`unsupported PostgreSQL record type: ${action.record_type}`);
     // Retained refunds are deliberately not in TABLES. They are obligations,
     // not erasure targets, even if a caller accidentally includes one.
