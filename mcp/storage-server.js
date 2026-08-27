@@ -15,14 +15,48 @@ const client = new Minio.Client({
 });
 const bucket = process.env.MINIO_BUCKET || 'shopkart-uploads';
 const result = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
+const maxResults = positiveInteger(process.env.MCP_STORAGE_MAX_RESULTS || process.env.MCP_MAX_RESULTS, 1000);
 
-function listObjects(prefix) {
+function positiveInteger(value, fallback) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function objectMetadata(object) {
+  return { key: object.name, size: object.size, etag: object.etag, last_modified: object.lastModified };
+}
+
+function listObjects(prefix, query) {
   return new Promise((resolve, reject) => {
     const objects = [];
+    const needle = query?.toLowerCase();
+    let truncated = false;
+    let settled = false;
     const stream = client.listObjectsV2(bucket, prefix, true);
-    stream.on('data', (object) => objects.push({ key: object.name, size: object.size, etag: object.etag, last_modified: object.lastModified }));
-    stream.on('end', () => resolve(objects));
-    stream.on('error', reject);
+
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else resolve({ objects, truncated, limit: maxResults });
+    };
+
+    stream.on('data', (object) => {
+      if (needle && !object.name.toLowerCase().includes(needle)) return;
+      if (objects.length >= maxResults) {
+        truncated = true;
+        stream.destroy();
+        finish();
+        return;
+      }
+      objects.push(objectMetadata(object));
+    });
+    stream.on('end', () => finish());
+    stream.on('error', (error) => {
+      // Destroying the stream after reaching the cap is an intentional stop.
+      if (truncated) finish();
+      else finish(error);
+    });
   });
 }
 
@@ -47,11 +81,7 @@ function createServer() {
   }, async ({ object_key }) => result(await statObject(object_key)));
   tool('storage_search_objects', 'Search object keys by a required substring, returning metadata only.', {
     query: z.string().min(1).max(200),
-  }, async ({ query }) => {
-    const objects = await listObjects('');
-    const needle = query.toLowerCase();
-    return result(objects.filter((object) => object.key.toLowerCase().includes(needle)));
-  });
+  }, async ({ query }) => result(await listObjects('', query)));
   return server;
 }
 
