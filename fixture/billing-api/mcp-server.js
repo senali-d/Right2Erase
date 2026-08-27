@@ -224,9 +224,10 @@ if (process.env.MCP_TRANSPORT === 'http') {
 
   for (const method of ['get', 'delete']) {
     app[method]('/mcp', async (req, res) => {
-      const transport = transports.get(req.headers['mcp-session-id']);
+      const sessionId = req.headers['mcp-session-id'];
+      const transport = transports.get(sessionId);
       if (!transport) {
-        res.status(400).send('Invalid or missing MCP session');
+        res.status(sessionId ? 404 : 400).send('Invalid or missing MCP session');
         return;
       }
       if (transport.sessionId) refreshSession(transport.sessionId, transport);
