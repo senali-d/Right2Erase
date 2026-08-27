@@ -109,10 +109,19 @@ export function createCase({ id, subject_email, subject_name }) {
   return getCase(id);
 }
 
+function mutableCase(caseId) {
+  const subject = db.prepare('SELECT * FROM cases WHERE id = ?').get(caseId);
+  if (!subject) throw new Error(`case not found: ${caseId}`);
+  if (subject.status === 'completed' || db.prepare('SELECT 1 FROM certificates WHERE case_id = ?').get(caseId)) {
+    throw new Error('case is terminal and cannot be modified');
+  }
+  return subject;
+}
+
 export function addFinding(caseId, finding) {
   const timestamp = now();
   const transaction = db.transaction(() => {
-    if (!db.prepare('SELECT 1 FROM cases WHERE id = ?').get(caseId)) throw new Error(`case not found: ${caseId}`);
+    mutableCase(caseId);
     db.prepare(`INSERT INTO findings (case_id, system, record_type, record_id, locator, metadata, disposition, created_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(caseId, finding.system, finding.record_type, String(finding.record_id), finding.locator ?? null,
         JSON.stringify(finding.metadata ?? {}), finding.disposition ?? 'erase', timestamp);
@@ -124,29 +133,33 @@ export function addFinding(caseId, finding) {
 }
 
 export function savePlan(caseId, body, planHash) {
-  const subject = db.prepare('SELECT revision FROM cases WHERE id = ?').get(caseId);
-  if (!subject) throw new Error(`case not found: ${caseId}`);
-  const version = db.prepare('SELECT COALESCE(MAX(version), 0) + 1 AS version FROM plans WHERE case_id = ?').get(caseId).version;
-  const timestamp = now();
-  db.prepare('INSERT INTO plans (case_id, version, body, plan_hash, case_revision, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(caseId, version, JSON.stringify(body), planHash, subject.revision, timestamp);
-  db.prepare("UPDATE cases SET status = 'planned', updated_at = ? WHERE id = ?").run(timestamp, caseId);
-  return hydrate(db.prepare('SELECT * FROM plans WHERE case_id = ? AND version = ?').get(caseId, version));
+  const transaction = db.transaction(() => {
+    const subject = mutableCase(caseId);
+    const version = db.prepare('SELECT COALESCE(MAX(version), 0) + 1 AS version FROM plans WHERE case_id = ?').get(caseId).version;
+    const timestamp = now();
+    db.prepare('INSERT INTO plans (case_id, version, body, plan_hash, case_revision, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(caseId, version, JSON.stringify(body), planHash, subject.revision, timestamp);
+    db.prepare("UPDATE cases SET status = 'planned', updated_at = ? WHERE id = ?").run(timestamp, caseId);
+    return hydrate(db.prepare('SELECT * FROM plans WHERE case_id = ? AND version = ?').get(caseId, version));
+  });
+  return transaction();
 }
 
 export function recordApproval(caseId, planHash, approvedBy, reason) {
-  const subject = db.prepare('SELECT revision FROM cases WHERE id = ?').get(caseId);
-  if (!subject) throw new Error(`case not found: ${caseId}`);
-  const plan = db.prepare('SELECT * FROM plans WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash);
-  const latest = db.prepare('SELECT * FROM plans WHERE case_id = ? ORDER BY version DESC LIMIT 1').get(caseId);
-  if (!plan) throw new Error('plan hash does not match a stored plan for this case');
-  if (!latest || latest.id !== plan.id || plan.case_revision !== subject.revision) {
-    throw new Error('plan is stale; create a new plan for the current case revision');
-  }
-  const timestamp = now();
-  db.prepare('INSERT INTO approvals (case_id, plan_hash, case_revision, approved_by, reason, approved_at) VALUES (?, ?, ?, ?, ?, ?)').run(caseId, planHash, subject.revision, approvedBy, reason ?? null, timestamp);
-  db.prepare("UPDATE cases SET status = 'approved', updated_at = ? WHERE id = ?").run(timestamp, caseId);
-  return db.prepare('SELECT * FROM approvals WHERE case_id = ? ORDER BY id DESC LIMIT 1').get(caseId);
+  const transaction = db.transaction(() => {
+    const subject = mutableCase(caseId);
+    const plan = db.prepare('SELECT * FROM plans WHERE case_id = ? AND plan_hash = ?').get(caseId, planHash);
+    const latest = db.prepare('SELECT * FROM plans WHERE case_id = ? ORDER BY version DESC LIMIT 1').get(caseId);
+    if (!plan) throw new Error('plan hash does not match a stored plan for this case');
+    if (!latest || latest.id !== plan.id || plan.case_revision !== subject.revision) {
+      throw new Error('plan is stale; create a new plan for the current case revision');
+    }
+    const timestamp = now();
+    db.prepare('INSERT INTO approvals (case_id, plan_hash, case_revision, approved_by, reason, approved_at) VALUES (?, ?, ?, ?, ?, ?)').run(caseId, planHash, subject.revision, approvedBy, reason ?? null, timestamp);
+    db.prepare("UPDATE cases SET status = 'approved', updated_at = ? WHERE id = ?").run(timestamp, caseId);
+    return db.prepare('SELECT * FROM approvals WHERE case_id = ? ORDER BY id DESC LIMIT 1').get(caseId);
+  });
+  return transaction();
 }
 
 export function close() { db.close(); }

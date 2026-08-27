@@ -47,12 +47,12 @@ function createServer() {
   }, async ({ status }) => text(listCases(status)));
 
   server.registerTool('finding_add', {
-    description: 'Record a discovered personal-data record and its intended disposition.',
+    description: 'Record a discovered personal-data record and its intended disposition. Terminal cases cannot be mutated.',
     inputSchema: { case_id: caseId, ...finding }, annotations: write,
   }, async ({ case_id, ...value }) => text(addFinding(case_id, value)));
 
   server.registerTool('plan_create', {
-    description: 'Build and persist a deletion plan from findings. Returns the SHA-256 hash to review.',
+    description: 'Build and persist a deletion plan from findings. Terminal cases cannot be mutated; returns the SHA-256 hash to review.',
     inputSchema: { case_id: caseId }, annotations: write,
   }, async ({ case_id }) => {
     const value = getCase(case_id);
@@ -63,7 +63,7 @@ function createServer() {
   });
 
   server.registerTool('plan_approve', {
-    description: 'Record human approval for the latest plan at the current case revision. Older plan hashes cannot be approved.',
+    description: 'Record human approval for the latest plan at the current case revision. Terminal cases cannot be mutated and older plan hashes cannot be approved.',
     inputSchema: { case_id: caseId, plan_hash: z.string().length(64), approved_by: z.string().min(1).max(200), reason: z.string().max(2000).optional() }, annotations: write,
   }, async ({ case_id, plan_hash, approved_by, reason }) => text(recordApproval(case_id, plan_hash, approved_by, reason)));
 
