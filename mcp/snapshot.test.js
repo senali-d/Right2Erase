@@ -174,12 +174,22 @@ test('deleteSnapshot removes a sandbox file and is a no-op if it is already gone
   }
 });
 
-test('sandboxSnapshotPath stays inside the sandbox directory and assertWithinSandbox accepts it', () => {
+test('sandboxSnapshotPath returns a path inside the sandbox directory', () => {
   const dir = tempSandbox();
   try {
     const dbPath = sandboxSnapshotPath(7, dir);
     assert.equal(path.dirname(dbPath), resolveSandboxDir(dir));
-    assert.equal(assertWithinSandbox(dbPath, dir), path.resolve(dbPath));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('assertWithinSandbox accepts a real regular file inside the sandbox directory', () => {
+  const dir = tempSandbox();
+  try {
+    const dbPath = sandboxSnapshotPath(7, dir);
+    seedSnapshot(dbPath);
+    assert.equal(assertWithinSandbox(dbPath, dir), fs.realpathSync(dbPath));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -224,12 +234,64 @@ test('concurrent exports for the same account never collide: each snapshot survi
   }
 });
 
-test('assertWithinSandbox rejects a path escaping the sandbox directory', () => {
+test('assertWithinSandbox rejects a missing snapshot', () => {
   const dir = tempSandbox();
   try {
-    assert.throws(() => assertWithinSandbox('/etc/passwd', dir), /outside the sandbox directory/);
-    assert.throws(() => assertWithinSandbox(path.join(dir, '..', 'escaped.db'), dir), /outside the sandbox directory/);
+    assert.throws(() => assertWithinSandbox(path.join(dir, 'nope.db'), dir), /snapshot not found/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('assertWithinSandbox rejects a real file that exists outside the sandbox directory', () => {
+  const dir = tempSandbox();
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oubliette-outside-'));
+  try {
+    const outsidePath = path.join(outsideDir, 'escaped.db');
+    seedSnapshot(outsidePath);
+    assert.throws(() => assertWithinSandbox(outsidePath, dir), /outside the sandbox directory/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test('assertWithinSandbox rejects a symlink placed inside the sandbox that resolves outside it', () => {
+  const dir = tempSandbox();
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oubliette-outside-'));
+  try {
+    const outsideTarget = path.join(outsideDir, 'secret.db');
+    seedSnapshot(outsideTarget);
+    // The symlink's own path is lexically inside the sandbox directory - a
+    // plain path.resolve prefix check would accept it - but it points
+    // somewhere else entirely, which is exactly what must be rejected.
+    const symlinkPath = path.join(dir, 'account-1.db');
+    fs.symlinkSync(outsideTarget, symlinkPath);
+
+    assert.throws(() => assertWithinSandbox(symlinkPath, dir), /not a regular file/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test('assertWithinSandbox rejects a symlinked directory escape even when the final path component is a real file', () => {
+  const dir = tempSandbox();
+  const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oubliette-outside-'));
+  try {
+    const realTarget = path.join(outsideDir, 'account-1.db');
+    seedSnapshot(realTarget);
+    // A symlinked subdirectory inside the sandbox whose target lives outside
+    // it: the file at the end of the path is a genuine regular file, so only
+    // resolving the real directory (not just lstat-ing the final component)
+    // catches this.
+    const linkedSubdir = path.join(dir, 'linked');
+    fs.symlinkSync(outsideDir, linkedSubdir);
+    const throughLink = path.join(linkedSubdir, 'account-1.db');
+
+    assert.throws(() => assertWithinSandbox(throughLink, dir), /outside the sandbox directory/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(outsideDir, { recursive: true, force: true });
   }
 });

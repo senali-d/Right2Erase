@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /** Read-only ShopKart Postgres MCP adapter. No arbitrary SQL or mutation tools. */
-import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -39,6 +39,15 @@ function createServer() {
   const tool = (name, description, inputSchema, handler, annotations = readOnly) => server.registerTool(name, {
     description, inputSchema, annotations,
   }, handler);
+
+  // Maps opaque snapshot_id -> the real sandbox path it was exported to.
+  // db_rehearse_deletion_plan and db_delete_snapshot accept only an id looked
+  // up here, never a path string from the caller, so neither tool can ever be
+  // pointed at a file this process did not itself just export - a symlink
+  // placed inside the sandbox directory has no id to be reached through.
+  // Scoped to this session's server instance; ids from one session are
+  // meaningless in another.
+  const snapshots = new Map();
 
   tool('db_find_accounts', 'Find accounts by exact email (current or historical) or exact display name. Never use name alone to select a deletion target. account_emails has no cross-account uniqueness constraint, so a historical address can resolve to more than one account; check matched_via on every row and treat multiple distinct accounts as a collision to resolve manually, not a set of deletion targets.', {
     email: z.string().email().optional(), full_name: z.string().min(1).max(200).optional(),
@@ -116,7 +125,7 @@ function createServer() {
     );
     return result(rows);
   });
-  tool('db_export_subject_snapshot', 'Export one account and every row reachable from it (historical emails, orders, order items, settled refunds, support tickets, uploads, event-log rows matched by known email/IP, and retained refunds referenced by its orders) into a self-contained sandbox SQLite snapshot. The snapshot enforces the same foreign-key dependencies as production PostgreSQL, so db_rehearse_deletion_plan can prove a deletion order safe before it ever touches real ShopKart data. Every call writes a fresh, uniquely named file, even for the same account, so concurrent exports never overwrite or delete each other; always use the returned snapshot_path, never a guessed or reconstructed one. Never call this with an ambiguous or unresolved account id.', {
+  tool('db_export_subject_snapshot', 'Export one account and every row reachable from it (historical emails, orders, order items, settled refunds, support tickets, uploads, event-log rows matched by known email/IP, and retained refunds referenced by its orders) into a self-contained sandbox SQLite snapshot. The snapshot enforces the same foreign-key dependencies as production PostgreSQL, so db_rehearse_deletion_plan can prove a deletion order safe before it ever touches real ShopKart data. Every call writes a fresh, uniquely named file, even for the same account, so concurrent exports never overwrite or delete each other. Returns snapshot_id: pass that opaque token, not snapshot_path, to db_rehearse_deletion_plan and db_delete_snapshot - those tools accept only an id this server issued, never a path. Never call this with an ambiguous or unresolved account id.', {
     account_id: z.coerce.number().int().positive(),
   }, async ({ account_id }) => {
     const accountResult = await pool.query(
@@ -146,6 +155,7 @@ function createServer() {
       orderNumbers.length ? pool.query('SELECT id, source_order_number, amount_cents, reason, opened_at, retained_at FROM retained_refunds WHERE source_order_number = ANY($1::text[]) ORDER BY id', [orderNumbers]) : { rows: [] },
     ]);
 
+    const snapshotId = randomUUID();
     const dbPath = sandboxSnapshotPath(account_id, sandboxDir);
     const counts = writeSubjectSnapshot({
       dbPath,
@@ -155,26 +165,31 @@ function createServer() {
         uploads: uploads.rows, event_log: events.rows, retained_refunds: retained.rows,
       },
     });
-    return result({ account_id, snapshot_path: dbPath, counts });
+    snapshots.set(snapshotId, dbPath);
+    return result({ account_id, snapshot_id: snapshotId, snapshot_path: dbPath, counts });
   }, sandboxWrite);
-  tool('db_rehearse_deletion_plan', "Rehearse an ordered list of deletes against a sandbox snapshot from db_export_subject_snapshot. Every attempt runs inside a transaction that is always rolled back, so rehearsal never mutates the snapshot and never touches real ShopKart data. If the given order hits a foreign-key violation (for example deleting an order before its order_items) and auto_order is not set to false, a second attempt is made in the known leaf-to-root order and both attempts are returned. Call this after plan_create and before requesting human approval; do not request approval for a plan that fails rehearsal.", {
-    snapshot_path: z.string().min(1),
+  tool('db_rehearse_deletion_plan', "Rehearse an ordered list of deletes against a sandbox snapshot from db_export_subject_snapshot, addressed by the snapshot_id that call returned - not a path. Every attempt runs inside a transaction that is always rolled back, so rehearsal never mutates the snapshot and never touches real ShopKart data. If the given order hits a foreign-key violation (for example deleting an order before its order_items) and auto_order is not set to false, a second attempt is made in the known leaf-to-root order and both attempts are returned. Call this after plan_create and before requesting human approval; do not request approval for a plan that fails rehearsal.", {
+    snapshot_id: z.string().uuid(),
     actions: z.array(z.object({
       record_type: z.string().min(1),
       record_id: z.union([z.string(), z.number()]),
     })).min(1).max(5000),
     auto_order: z.boolean().optional(),
-  }, async ({ snapshot_path, actions, auto_order }) => {
-    const resolved = assertWithinSandbox(snapshot_path, sandboxDir);
-    if (!fs.existsSync(resolved)) throw new Error(`snapshot not found: ${snapshot_path}`);
+  }, async ({ snapshot_id, actions, auto_order }) => {
+    const dbPath = snapshots.get(snapshot_id);
+    if (!dbPath) throw new Error(`unknown snapshot_id: ${snapshot_id}`);
+    const resolved = assertWithinSandbox(dbPath, sandboxDir);
     return result(rehearseDeletionPlan({ dbPath: resolved, actions, autoOrder: auto_order !== false }));
   });
-  tool('db_delete_snapshot', 'Delete a sandbox snapshot previously written by db_export_subject_snapshot. Call this once rehearsal for that account is finished (whether it passed or failed) so the exported PII copy does not outlive the rehearsal that needed it.', {
-    snapshot_path: z.string().min(1),
-  }, async ({ snapshot_path }) => {
-    const resolved = assertWithinSandbox(snapshot_path, sandboxDir);
+  tool('db_delete_snapshot', 'Delete a sandbox snapshot previously written by db_export_subject_snapshot, addressed by the snapshot_id that call returned - not a path. Call this once rehearsal for that account is finished (whether it passed or failed) so the exported PII copy does not outlive the rehearsal that needed it. A no-op if the id is unknown or was already deleted.', {
+    snapshot_id: z.string().uuid(),
+  }, async ({ snapshot_id }) => {
+    const dbPath = snapshots.get(snapshot_id);
+    if (!dbPath) return result({ snapshot_id, deleted: false });
+    const resolved = assertWithinSandbox(dbPath, sandboxDir);
     deleteSnapshot(resolved);
-    return result({ snapshot_path: resolved, deleted: true });
+    snapshots.delete(snapshot_id);
+    return result({ snapshot_id, deleted: true });
   }, sandboxWrite);
   return server;
 }

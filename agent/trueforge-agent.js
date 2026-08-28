@@ -236,26 +236,31 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
     for (const [accountId, actions] of Object.entries(postgresActionsByAccount || {})) {
       if (!actions.length) continue;
       // Each export gets its own uniquely named snapshot file, even for the
-      // same account, so a concurrent investigation of this account cannot
-      // overwrite or delete the file this rehearsal is using. Always use the
-      // path returned here - never reconstruct or guess one. If the export
-      // itself throws, it never returns a path, so there is nothing here for
-      // this loop to clean up: db_export_subject_snapshot only ever hands
-      // back a path once the snapshot behind it is fully written.
+      // same account, addressed only by the opaque snapshot_id it returns -
+      // never a path. A concurrent investigation of this account cannot
+      // overwrite or delete the file this rehearsal is using, and neither
+      // this agent nor anything it talks to can point db_rehearse_deletion_plan
+      // or db_delete_snapshot at an arbitrary file, because those tools only
+      // accept an id the server itself issued. If the export itself throws,
+      // it never returns an id, so there is nothing here for this loop to
+      // clean up: db_export_subject_snapshot only hands back an id once the
+      // snapshot behind it is fully written.
       const snapshot = await call('db_export_subject_snapshot', { account_id: Number(accountId) });
       try {
         const outcome = await call('db_rehearse_deletion_plan', {
-          snapshot_path: snapshot.snapshot_path, actions, auto_order: true,
+          snapshot_id: snapshot.snapshot_id, actions, auto_order: true,
         });
         if (!outcome.ok) {
           throw new Error(`sandbox rehearsal failed for account ${accountId}: ${JSON.stringify(outcome.attempts)}`);
         }
-        rehearsals.push({ account_id: Number(accountId), snapshot_path: snapshot.snapshot_path, attempts: outcome.attempts });
+        rehearsals.push({
+          account_id: Number(accountId), snapshot_id: snapshot.snapshot_id, snapshot_path: snapshot.snapshot_path, attempts: outcome.attempts,
+        });
       } finally {
         // The exported snapshot is a full PII copy of the subject's reachable
         // data; it must not outlive the rehearsal it existed for, regardless
         // of whether that rehearsal passed or failed.
-        await call('db_delete_snapshot', { snapshot_path: snapshot.snapshot_path });
+        await call('db_delete_snapshot', { snapshot_id: snapshot.snapshot_id });
       }
     }
     return rehearsals;

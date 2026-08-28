@@ -102,8 +102,17 @@ backs two ShopKart db tools:
   production PostgreSQL. Every call writes a fresh, cryptographically unique
   file - never a deterministic per-account path - so concurrent exports for
   the same account (two overlapping investigations, a retry racing the
-  original) can never overwrite or delete each other's snapshot. Callers must
-  always use the returned `snapshot_path`, never reconstruct one.
+  original) can never overwrite or delete each other's snapshot. It returns
+  an opaque `snapshot_id`, not the file's path.
+- `db_rehearse_deletion_plan` and `db_delete_snapshot` both take that
+  `snapshot_id`, never a path. Each server session keeps an in-memory map from
+  id to the real file it exported, so these tools can only ever be pointed at
+  a snapshot this process itself just wrote - not a client-supplied string, so
+  a symlink placed inside the sandbox directory (by anything with local write
+  access to it) has no id to be reached through. The path each id resolves to
+  is still checked with `assertWithinSandbox` before use, which resolves
+  symlinks (`fs.realpathSync`) and rejects anything that isn't a plain regular
+  file, as defense in depth.
 - `db_rehearse_deletion_plan` tries an ordered list of deletes against that
   snapshot inside a transaction it always rolls back, so rehearsal can never
   mutate the snapshot, let alone real ShopKart data. If the given order hits a

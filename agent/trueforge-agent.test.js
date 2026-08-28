@@ -57,9 +57,11 @@ function rowsResponder(overrides = {}) {
     finding_add: async () => ({ ok: true }),
     case_complete_discovery: async () => ({ ok: true }),
     plan_create: async () => ({ plan_hash: 'a'.repeat(64) }),
-    db_export_subject_snapshot: async ({ account_id }) => ({ account_id, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} }),
+    db_export_subject_snapshot: async ({ account_id }) => ({
+      account_id, snapshot_id: `snap-${account_id}`, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {},
+    }),
     db_rehearse_deletion_plan: async () => ({ ok: true, attempts: [{ order: 'as_planned', ok: true, steps: 0 }] }),
-    db_delete_snapshot: async ({ snapshot_path }) => ({ snapshot_path, deleted: true }),
+    db_delete_snapshot: async ({ snapshot_id }) => ({ snapshot_id, deleted: true }),
     ...overrides,
   };
   return async (tool, args) => {
@@ -301,7 +303,7 @@ test('prepare() exports a sandbox snapshot and rehearses the plan for every disc
     db_find_accounts: async () => ({ rows: [{ id: 42 }] }),
     db_export_subject_snapshot: async ({ account_id }) => {
       calls.push(['db_export_subject_snapshot', account_id]);
-      return { account_id, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} };
+      return { account_id, snapshot_id: `snap-${account_id}`, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} };
     },
     db_rehearse_deletion_plan: async (args) => {
       calls.push(['db_rehearse_deletion_plan', args]);
@@ -315,12 +317,14 @@ test('prepare() exports a sandbox snapshot and rehearses the plan for every disc
   const [exportCall, rehearseCall] = calls;
   assert.deepEqual(exportCall, ['db_export_subject_snapshot', 42]);
   assert.equal(rehearseCall[0], 'db_rehearse_deletion_plan');
-  assert.equal(rehearseCall[1].snapshot_path, '/sandbox/account-42.db');
+  // Rehearsal is addressed by the opaque id the export returned, never a path.
+  assert.equal(rehearseCall[1].snapshot_id, 'snap-42');
+  assert.equal(rehearseCall[1].snapshot_path, undefined);
   // The account itself is always in the rehearsed action set, even with no
   // other postgres records discovered for it.
   assert.ok(rehearseCall[1].actions.some((action) => action.record_type === 'account' && action.record_id === 42));
   assert.deepEqual(prepared.rehearsal, [{
-    account_id: 42, snapshot_path: '/sandbox/account-42.db',
+    account_id: 42, snapshot_id: 'snap-42', snapshot_path: '/sandbox/account-42.db',
     attempts: [{ order: 'as_planned', ok: true, steps: rehearseCall[1].actions.length }],
   }]);
   // The internal per-account action map used to drive rehearsal must not leak
@@ -350,24 +354,29 @@ test('prepare() deletes the sandbox snapshot after rehearsal succeeds', async ()
   const deleteCalls = [];
   const callTool = rowsResponder({
     db_find_accounts: async () => ({ rows: [{ id: 42 }] }),
-    db_export_subject_snapshot: async ({ account_id }) => ({ account_id, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} }),
+    db_export_subject_snapshot: async ({ account_id }) => ({
+      account_id, snapshot_id: `snap-${account_id}`, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {},
+    }),
     db_rehearse_deletion_plan: async () => ({ ok: true, attempts: [{ order: 'as_planned', ok: true, steps: 1 }] }),
-    db_delete_snapshot: async ({ snapshot_path }) => { deleteCalls.push(snapshot_path); return { snapshot_path, deleted: true }; },
+    db_delete_snapshot: async ({ snapshot_id }) => { deleteCalls.push(snapshot_id); return { snapshot_id, deleted: true }; },
   });
 
   const agent = createTrueForgeAgent({ callTool });
   await agent.prepare({ subject_email: 'subject@example.com' });
 
-  assert.deepEqual(deleteCalls, ['/sandbox/account-42.db']);
+  // Deletion is addressed by the opaque id, never a path.
+  assert.deepEqual(deleteCalls, ['snap-42']);
 });
 
 test('prepare() deletes the sandbox snapshot even when rehearsal fails', async () => {
   const deleteCalls = [];
   const callTool = rowsResponder({
     db_find_accounts: async () => ({ rows: [{ id: 42 }] }),
-    db_export_subject_snapshot: async ({ account_id }) => ({ account_id, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} }),
+    db_export_subject_snapshot: async ({ account_id }) => ({
+      account_id, snapshot_id: `snap-${account_id}`, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {},
+    }),
     db_rehearse_deletion_plan: async () => ({ ok: false, attempts: [{ order: 'as_planned', ok: false, error: 'boom' }] }),
-    db_delete_snapshot: async ({ snapshot_path }) => { deleteCalls.push(snapshot_path); return { snapshot_path, deleted: true }; },
+    db_delete_snapshot: async ({ snapshot_id }) => { deleteCalls.push(snapshot_id); return { snapshot_id, deleted: true }; },
   });
 
   const agent = createTrueForgeAgent({ callTool });
@@ -376,5 +385,5 @@ test('prepare() deletes the sandbox snapshot even when rehearsal fails', async (
     /sandbox rehearsal failed/,
   );
 
-  assert.deepEqual(deleteCalls, ['/sandbox/account-42.db']);
+  assert.deepEqual(deleteCalls, ['snap-42']);
 });

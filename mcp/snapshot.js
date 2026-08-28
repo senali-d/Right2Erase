@@ -146,14 +146,37 @@ export function sandboxSnapshotPath(accountId, sandboxDir = resolveSandboxDir())
   return path.join(resolveSandboxDir(sandboxDir), `account-${accountId}-${randomUUID()}.db`);
 }
 
-/** Throws unless filePath resolves inside sandboxDir. Guards db_rehearse_deletion_plan against being pointed at an arbitrary file. */
+/**
+ * Resolve filePath to its real (symlink-followed) location and throw unless
+ * that location is a regular file inside the real (symlink-followed) sandbox
+ * directory. Lexical prefix checks (plain path.resolve) do not catch a
+ * symlink placed inside the sandbox directory that points outside it - the
+ * symlink's own path is lexically "inside," but opening it follows the link
+ * to wherever it actually points. lstat, not stat, is what makes this safe:
+ * it reports on filePath's own directory entry rather than the entry the
+ * link resolves to, so a symlink is caught here as "not a regular file"
+ * before realpath ever has to be asked to resolve one.
+ *
+ * This is a defense-in-depth check, not the primary safeguard. The primary
+ * safeguard is that filePath should only ever be a path already looked up
+ * from this process's own snapshot registry (see database-server.js), never
+ * a string a caller supplied directly - so this function should never be
+ * asked to validate untrusted input in the first place. It still cannot
+ * close every race: an entry that is a regular file at lstat time could in
+ * principle be replaced before it is opened afterward. better-sqlite3 opens
+ * by path, not by an already-validated file descriptor, so that residual
+ * window cannot be fully closed without a different SQLite binding.
+ */
 export function assertWithinSandbox(filePath, sandboxDir = resolveSandboxDir()) {
-  const resolved = path.resolve(filePath);
-  const base = resolveSandboxDir(sandboxDir);
-  if (resolved !== base && !resolved.startsWith(base + path.sep)) {
+  const entry = fs.lstatSync(filePath, { throwIfNoEntry: false });
+  if (!entry) throw new Error('snapshot not found');
+  if (!entry.isFile()) throw new Error('snapshot target is not a regular file');
+  const realBase = fs.realpathSync(resolveSandboxDir(sandboxDir));
+  const realPath = fs.realpathSync(filePath);
+  if (realPath !== realBase && !realPath.startsWith(realBase + path.sep)) {
     throw new Error('snapshot path is outside the sandbox directory');
   }
-  return resolved;
+  return realPath;
 }
 
 function coerce(value) {
