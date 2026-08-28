@@ -1,10 +1,14 @@
 #!/usr/bin/env node
 /** Read-only ShopKart Postgres MCP adapter. No arbitrary SQL or mutation tools. */
+import fs from 'node:fs';
 import pg from 'pg';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { startHttpMcp } from './http-transport.js';
+import {
+  assertWithinSandbox, rehearseDeletionPlan, resolveSandboxDir, sandboxSnapshotPath, writeSubjectSnapshot,
+} from './snapshot.js';
 
 const pool = new pg.Pool({
   connectionString: process.env.DATABASE_URL || 'postgres://shopkart:shopkart@localhost:5432/shopkart',
@@ -24,11 +28,16 @@ function positiveInteger(value, fallback) {
 // no upper limit on how many batches it ends up issuing.
 const maxAccountEmails = positiveInteger(process.env.MCP_DB_MAX_ACCOUNT_EMAILS || process.env.MCP_MAX_RESULTS, 500);
 
+const sandboxDir = resolveSandboxDir();
+
 function createServer() {
   const server = new McpServer({ name: 'shopkart-db', version: '1.0.0' });
   const readOnly = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
-  const tool = (name, description, inputSchema, handler) => server.registerTool(name, {
-    description, inputSchema, annotations: readOnly,
+  // Snapshot export never mutates ShopKart, but each call writes a fresh
+  // sandbox file, so it is not idempotentHint like the pure query tools above.
+  const sandboxWrite = { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false };
+  const tool = (name, description, inputSchema, handler, annotations = readOnly) => server.registerTool(name, {
+    description, inputSchema, annotations,
   }, handler);
 
   tool('db_find_accounts', 'Find accounts by exact email (current or historical) or exact display name. Never use name alone to select a deletion target. account_emails has no cross-account uniqueness constraint, so a historical address can resolve to more than one account; check matched_via on every row and treat multiple distinct accounts as a collision to resolve manually, not a set of deletion targets.', {
@@ -106,6 +115,59 @@ function createServer() {
       [emails?.length ? emails : null, ip_address ?? null],
     );
     return result(rows);
+  });
+  tool('db_export_subject_snapshot', 'Export one account and every row reachable from it (historical emails, orders, order items, settled refunds, support tickets, uploads, event-log rows matched by known email/IP, and retained refunds referenced by its orders) into a self-contained sandbox SQLite snapshot. The snapshot enforces the same foreign-key dependencies as production PostgreSQL, so db_rehearse_deletion_plan can prove a deletion order safe before it ever touches real ShopKart data. Never call this with an ambiguous or unresolved account id.', {
+    account_id: z.coerce.number().int().positive(),
+  }, async ({ account_id }) => {
+    const accountResult = await pool.query(
+      'SELECT id, email, full_name, country, last_seen_ip, created_at FROM accounts WHERE id=$1', [account_id],
+    );
+    const account = accountResult.rows[0];
+    if (!account) throw new Error(`account not found: ${account_id}`);
+
+    const [emails, orders] = await Promise.all([
+      pool.query('SELECT id, account_id, email, is_primary, valid_from, valid_until FROM account_emails WHERE account_id=$1 ORDER BY id', [account_id]),
+      pool.query('SELECT id, account_id, order_number, total_cents, status, ship_address, created_at FROM orders WHERE account_id=$1 ORDER BY id', [account_id]),
+    ]);
+    const orderIds = orders.rows.map((order) => order.id);
+    const orderNumbers = orders.rows.map((order) => order.order_number);
+    const knownEmails = [...new Set([account.email, ...emails.rows.map((row) => row.email)])];
+
+    const [items, refunds, tickets, uploads, events, retained] = await Promise.all([
+      orderIds.length ? pool.query('SELECT id, order_id, sku, product_name, qty, price_cents FROM order_items WHERE order_id = ANY($1::int[]) ORDER BY id', [orderIds]) : { rows: [] },
+      orderIds.length ? pool.query("SELECT id, order_id, amount_cents, status, reason, opened_at, settled_at FROM refunds WHERE order_id = ANY($1::int[]) ORDER BY id", [orderIds]) : { rows: [] },
+      pool.query('SELECT id, account_id, subject, body, status, created_at FROM support_tickets WHERE account_id=$1 ORDER BY id', [account_id]),
+      pool.query('SELECT id, account_id, object_key, kind, bytes, created_at FROM uploads WHERE account_id=$1 ORDER BY id', [account_id]),
+      pool.query(
+        `SELECT id, ts, email, ip_address, method, path, status_code, user_agent FROM event_log
+         WHERE email = ANY($1::text[]) OR ($2::inet IS NOT NULL AND ip_address=$2) ORDER BY ts, id`,
+        [knownEmails, account.last_seen_ip || null],
+      ),
+      orderNumbers.length ? pool.query('SELECT id, source_order_number, amount_cents, reason, opened_at, retained_at FROM retained_refunds WHERE source_order_number = ANY($1::text[]) ORDER BY id', [orderNumbers]) : { rows: [] },
+    ]);
+
+    const dbPath = sandboxSnapshotPath(account_id, sandboxDir);
+    const counts = writeSubjectSnapshot({
+      dbPath,
+      tables: {
+        accounts: [account], account_emails: emails.rows, orders: orders.rows,
+        order_items: items.rows, refunds: refunds.rows, support_tickets: tickets.rows,
+        uploads: uploads.rows, event_log: events.rows, retained_refunds: retained.rows,
+      },
+    });
+    return result({ account_id, snapshot_path: dbPath, counts });
+  }, sandboxWrite);
+  tool('db_rehearse_deletion_plan', "Rehearse an ordered list of deletes against a sandbox snapshot from db_export_subject_snapshot. Every attempt runs inside a transaction that is always rolled back, so rehearsal never mutates the snapshot and never touches real ShopKart data. If the given order hits a foreign-key violation (for example deleting an order before its order_items) and auto_order is not set to false, a second attempt is made in the known leaf-to-root order and both attempts are returned. Call this after plan_create and before requesting human approval; do not request approval for a plan that fails rehearsal.", {
+    snapshot_path: z.string().min(1),
+    actions: z.array(z.object({
+      record_type: z.string().min(1),
+      record_id: z.union([z.string(), z.number()]),
+    })).min(1).max(5000),
+    auto_order: z.boolean().optional(),
+  }, async ({ snapshot_path, actions, auto_order }) => {
+    const resolved = assertWithinSandbox(snapshot_path, sandboxDir);
+    if (!fs.existsSync(resolved)) throw new Error(`snapshot not found: ${snapshot_path}`);
+    return result(rehearseDeletionPlan({ dbPath: resolved, actions, autoOrder: auto_order !== false }));
   });
   return server;
 }

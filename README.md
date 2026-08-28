@@ -88,3 +88,28 @@ validated, approved plan, withheld keys are rejected, and PostgreSQL must report
 returns per-object results and requested/deleted/failed counts. The discovery
 adapter remains read-only; production clients are never constructed by this
 path.
+
+## Sandbox rehearsal
+
+Before a plan ever reaches a human, `prepare()` rehearses it. `mcp/snapshot.js`
+backs two ShopKart db tools:
+
+- `db_export_subject_snapshot` copies one account and everything reachable
+  from it (historical emails, orders, order items, settled refunds, support
+  tickets, uploads, matching event-log rows, and referenced retained refunds)
+  into a throwaway SQLite file under `OUBLIETTE_SANDBOX_DIR`
+  (`.oubliette/sandbox` by default) that enforces the same foreign keys as
+  production PostgreSQL.
+- `db_rehearse_deletion_plan` tries an ordered list of deletes against that
+  snapshot inside a transaction it always rolls back, so rehearsal can never
+  mutate the snapshot, let alone real ShopKart data. If the given order hits a
+  foreign-key violation, it retries once in the known leaf-to-root order and
+  reports both attempts.
+
+The agent's `prepare()` calls both for every discovered account right after
+`plan_create` and refuses to return a plan for approval if rehearsal never
+succeeds. In the seeded fixture this genuinely catches a real ordering
+mistake: findings (and therefore the plan's action order) record an account's
+orders before their order items and refunds, so the first rehearsal attempt
+fails with `FOREIGN KEY constraint failed` on an `order` row, and the
+canonical-order retry succeeds.

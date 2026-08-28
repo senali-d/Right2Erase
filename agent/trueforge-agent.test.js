@@ -57,6 +57,8 @@ function rowsResponder(overrides = {}) {
     finding_add: async () => ({ ok: true }),
     case_complete_discovery: async () => ({ ok: true }),
     plan_create: async () => ({ plan_hash: 'a'.repeat(64) }),
+    db_export_subject_snapshot: async ({ account_id }) => ({ account_id, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} }),
+    db_rehearse_deletion_plan: async () => ({ ok: true, attempts: [{ order: 'as_planned', ok: true, steps: 0 }] }),
     ...overrides,
   };
   return async (tool, args) => {
@@ -290,4 +292,55 @@ test('a truncated db_get_account_emails page with no next_cursor refuses to plan
     /db_get_account_emails.*truncated.*next_cursor/,
   );
   assert.deepEqual(calls, []);
+});
+
+test('prepare() exports a sandbox snapshot and rehearses the plan for every discovered account', async () => {
+  const calls = [];
+  const callTool = rowsResponder({
+    db_find_accounts: async () => ({ rows: [{ id: 42 }] }),
+    db_export_subject_snapshot: async ({ account_id }) => {
+      calls.push(['db_export_subject_snapshot', account_id]);
+      return { account_id, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} };
+    },
+    db_rehearse_deletion_plan: async (args) => {
+      calls.push(['db_rehearse_deletion_plan', args]);
+      return { ok: true, attempts: [{ order: 'as_planned', ok: true, steps: args.actions.length }] };
+    },
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+  const prepared = await agent.prepare({ subject_email: 'subject@example.com' });
+
+  const [exportCall, rehearseCall] = calls;
+  assert.deepEqual(exportCall, ['db_export_subject_snapshot', 42]);
+  assert.equal(rehearseCall[0], 'db_rehearse_deletion_plan');
+  assert.equal(rehearseCall[1].snapshot_path, '/sandbox/account-42.db');
+  // The account itself is always in the rehearsed action set, even with no
+  // other postgres records discovered for it.
+  assert.ok(rehearseCall[1].actions.some((action) => action.record_type === 'account' && action.record_id === 42));
+  assert.deepEqual(prepared.rehearsal, [{
+    account_id: 42, snapshot_path: '/sandbox/account-42.db',
+    attempts: [{ order: 'as_planned', ok: true, steps: rehearseCall[1].actions.length }],
+  }]);
+  // The internal per-account action map used to drive rehearsal must not leak
+  // into the prepared result handed back to the caller.
+  assert.equal(prepared.postgres_actions_by_account, undefined);
+});
+
+test('prepare() refuses to hand a plan to approval when sandbox rehearsal never succeeds', async () => {
+  const callTool = rowsResponder({
+    db_rehearse_deletion_plan: async () => ({
+      ok: false,
+      attempts: [
+        { order: 'as_planned', ok: false, error: 'FOREIGN KEY constraint failed' },
+        { order: 'canonical_leaf_to_root', ok: false, error: 'FOREIGN KEY constraint failed' },
+      ],
+    }),
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+  await assert.rejects(
+    agent.prepare({ subject_email: 'subject@example.com' }),
+    /sandbox rehearsal failed/,
+  );
 });
