@@ -185,6 +185,11 @@ export function writeSubjectSnapshot({ dbPath, tables }) {
   }
 }
 
+/** Remove a sandbox snapshot file. A no-op if it is already gone. */
+export function deleteSnapshot(dbPath) {
+  if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
+}
+
 /** Try one delete order against the snapshot inside a transaction that is always rolled back. */
 function attemptDeleteOrder(dbPath, actions) {
   const db = new Database(dbPath);

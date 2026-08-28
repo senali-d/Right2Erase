@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  assertWithinSandbox, rehearseDeletionPlan, resolveSandboxDir, sandboxSnapshotPath, writeSubjectSnapshot,
+  assertWithinSandbox, deleteSnapshot, rehearseDeletionPlan, resolveSandboxDir, sandboxSnapshotPath, writeSubjectSnapshot,
 } from './snapshot.js';
 
 function tempSandbox() {
@@ -101,6 +101,21 @@ test('rehearsal never keeps its deletes: rows still exist in the snapshot after 
       autoOrder: false,
     });
     assert.equal(outcome.ok, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('deleteSnapshot removes a sandbox file and is a no-op if it is already gone', () => {
+  const dir = tempSandbox();
+  try {
+    const dbPath = path.join(dir, 'account-1.db');
+    seedSnapshot(dbPath);
+    assert.ok(fs.existsSync(dbPath));
+
+    deleteSnapshot(dbPath);
+    assert.ok(!fs.existsSync(dbPath));
+    assert.doesNotThrow(() => deleteSnapshot(dbPath));
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

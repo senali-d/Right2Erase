@@ -105,11 +105,22 @@ backs two ShopKart db tools:
   mutate the snapshot, let alone real ShopKart data. If the given order hits a
   foreign-key violation, it retries once in the known leaf-to-root order and
   reports both attempts.
+- `db_delete_snapshot` removes a snapshot file. The agent calls this
+  immediately after each account's rehearsal finishes, whether it passed or
+  failed, so the exported PII copy never outlives the rehearsal it existed
+  for.
 
-The agent's `prepare()` calls both for every discovered account right after
-`plan_create` and refuses to return a plan for approval if rehearsal never
-succeeds. In the seeded fixture this genuinely catches a real ordering
-mistake: findings (and therefore the plan's action order) record an account's
-orders before their order items and refunds, so the first rehearsal attempt
-fails with `FOREIGN KEY constraint failed` on an `order` row, and the
-canonical-order retry succeeds.
+The agent's `prepare()` calls export, rehearse, and delete for every
+discovered account right after `plan_create`, and refuses to return a plan
+for approval if rehearsal never succeeds. In the seeded fixture this
+exercises a real foreign-key failure and its auto-order retry: findings (and
+therefore the plan's action order) record an account's orders before their
+order items and refunds, so the first rehearsal attempt fails with `FOREIGN
+KEY constraint failed` on an `order` row, and the canonical-order retry
+succeeds. `src/postgres-executor.js` always deletes in its own fixed
+leaf-to-root table order regardless of a plan's action order, so this
+particular ordering mismatch can never itself reach real execution.
+Rehearsal's actual safety value is proving, before any human ever approves a
+plan, that every planned record still exists and every dependency resolves
+cleanly against a foreign-key-enforced copy of the data - the same "record
+not found" failure the real executor would otherwise only catch mid-deletion.

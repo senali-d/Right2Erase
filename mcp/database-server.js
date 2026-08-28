@@ -7,7 +7,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { startHttpMcp } from './http-transport.js';
 import {
-  assertWithinSandbox, rehearseDeletionPlan, resolveSandboxDir, sandboxSnapshotPath, writeSubjectSnapshot,
+  assertWithinSandbox, deleteSnapshot, rehearseDeletionPlan, resolveSandboxDir, sandboxSnapshotPath, writeSubjectSnapshot,
 } from './snapshot.js';
 
 const pool = new pg.Pool({
@@ -169,6 +169,13 @@ function createServer() {
     if (!fs.existsSync(resolved)) throw new Error(`snapshot not found: ${snapshot_path}`);
     return result(rehearseDeletionPlan({ dbPath: resolved, actions, autoOrder: auto_order !== false }));
   });
+  tool('db_delete_snapshot', 'Delete a sandbox snapshot previously written by db_export_subject_snapshot. Call this once rehearsal for that account is finished (whether it passed or failed) so the exported PII copy does not outlive the rehearsal that needed it.', {
+    snapshot_path: z.string().min(1),
+  }, async ({ snapshot_path }) => {
+    const resolved = assertWithinSandbox(snapshot_path, sandboxDir);
+    deleteSnapshot(resolved);
+    return result({ snapshot_path: resolved, deleted: true });
+  }, sandboxWrite);
   return server;
 }
 

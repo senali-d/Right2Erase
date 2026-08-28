@@ -19,6 +19,7 @@ export const DISCOVERY_TOOLS = new Set([
   'storage_list_objects', 'storage_get_object_metadata', 'storage_search_objects',
   'billing_find_customer', 'billing_get_customer', 'billing_list_charges',
   'billing_preview_erase', 'db_export_subject_snapshot', 'db_rehearse_deletion_plan',
+  'db_delete_snapshot',
 ]);
 
 export const OUBLIETTE_TOOLS = new Set([
@@ -235,13 +236,20 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
     for (const [accountId, actions] of Object.entries(postgresActionsByAccount || {})) {
       if (!actions.length) continue;
       const snapshot = await call('db_export_subject_snapshot', { account_id: Number(accountId) });
-      const outcome = await call('db_rehearse_deletion_plan', {
-        snapshot_path: snapshot.snapshot_path, actions, auto_order: true,
-      });
-      if (!outcome.ok) {
-        throw new Error(`sandbox rehearsal failed for account ${accountId}: ${JSON.stringify(outcome.attempts)}`);
+      try {
+        const outcome = await call('db_rehearse_deletion_plan', {
+          snapshot_path: snapshot.snapshot_path, actions, auto_order: true,
+        });
+        if (!outcome.ok) {
+          throw new Error(`sandbox rehearsal failed for account ${accountId}: ${JSON.stringify(outcome.attempts)}`);
+        }
+        rehearsals.push({ account_id: Number(accountId), snapshot_path: snapshot.snapshot_path, attempts: outcome.attempts });
+      } finally {
+        // The exported snapshot is a full PII copy of the subject's reachable
+        // data; it must not outlive the rehearsal it existed for, regardless
+        // of whether that rehearsal passed or failed.
+        await call('db_delete_snapshot', { snapshot_path: snapshot.snapshot_path });
       }
-      rehearsals.push({ account_id: Number(accountId), snapshot_path: snapshot.snapshot_path, attempts: outcome.attempts });
     }
     return rehearsals;
   }

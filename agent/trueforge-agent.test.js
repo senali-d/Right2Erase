@@ -59,6 +59,7 @@ function rowsResponder(overrides = {}) {
     plan_create: async () => ({ plan_hash: 'a'.repeat(64) }),
     db_export_subject_snapshot: async ({ account_id }) => ({ account_id, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} }),
     db_rehearse_deletion_plan: async () => ({ ok: true, attempts: [{ order: 'as_planned', ok: true, steps: 0 }] }),
+    db_delete_snapshot: async ({ snapshot_path }) => ({ snapshot_path, deleted: true }),
     ...overrides,
   };
   return async (tool, args) => {
@@ -343,4 +344,37 @@ test('prepare() refuses to hand a plan to approval when sandbox rehearsal never 
     agent.prepare({ subject_email: 'subject@example.com' }),
     /sandbox rehearsal failed/,
   );
+});
+
+test('prepare() deletes the sandbox snapshot after rehearsal succeeds', async () => {
+  const deleteCalls = [];
+  const callTool = rowsResponder({
+    db_find_accounts: async () => ({ rows: [{ id: 42 }] }),
+    db_export_subject_snapshot: async ({ account_id }) => ({ account_id, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} }),
+    db_rehearse_deletion_plan: async () => ({ ok: true, attempts: [{ order: 'as_planned', ok: true, steps: 1 }] }),
+    db_delete_snapshot: async ({ snapshot_path }) => { deleteCalls.push(snapshot_path); return { snapshot_path, deleted: true }; },
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+  await agent.prepare({ subject_email: 'subject@example.com' });
+
+  assert.deepEqual(deleteCalls, ['/sandbox/account-42.db']);
+});
+
+test('prepare() deletes the sandbox snapshot even when rehearsal fails', async () => {
+  const deleteCalls = [];
+  const callTool = rowsResponder({
+    db_find_accounts: async () => ({ rows: [{ id: 42 }] }),
+    db_export_subject_snapshot: async ({ account_id }) => ({ account_id, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} }),
+    db_rehearse_deletion_plan: async () => ({ ok: false, attempts: [{ order: 'as_planned', ok: false, error: 'boom' }] }),
+    db_delete_snapshot: async ({ snapshot_path }) => { deleteCalls.push(snapshot_path); return { snapshot_path, deleted: true }; },
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+  await assert.rejects(
+    agent.prepare({ subject_email: 'subject@example.com' }),
+    /sandbox rehearsal failed/,
+  );
+
+  assert.deepEqual(deleteCalls, ['/sandbox/account-42.db']);
 });
