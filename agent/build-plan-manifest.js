@@ -29,6 +29,7 @@ const DELETE_KEY_BY_RECORD_TYPE = {
 
 function parseResult(result) {
   const text = result?.content?.find((item) => item.type === 'text')?.text;
+  if (result?.isError) throw new Error(text || 'MCP tool call failed');
   if (!text) return result;
   try { return JSON.parse(text); } catch { return text; }
 }
@@ -78,7 +79,10 @@ async function main() {
   await client.connect(new StreamableHTTPClientTransport(new URL(MCP_SERVERS.oubliette)));
   try {
     const caseRecord = parseResult(await client.callTool({ name: 'case_get', arguments: { case_id: caseId } }));
-    const manifest = buildManifest(caseRecord.findings || []);
+    if (!caseRecord || !Array.isArray(caseRecord.findings)) {
+      throw new Error(`case_get returned a malformed response for ${caseId}: ${JSON.stringify(caseRecord)}`);
+    }
+    const manifest = buildManifest(caseRecord.findings);
     await writeFile(outPath, JSON.stringify(manifest, null, 2));
     console.log(`wrote ${outPath}`);
     console.log(JSON.stringify(manifest, null, 2));
