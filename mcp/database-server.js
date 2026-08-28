@@ -116,7 +116,7 @@ function createServer() {
     );
     return result(rows);
   });
-  tool('db_export_subject_snapshot', 'Export one account and every row reachable from it (historical emails, orders, order items, settled refunds, support tickets, uploads, event-log rows matched by known email/IP, and retained refunds referenced by its orders) into a self-contained sandbox SQLite snapshot. The snapshot enforces the same foreign-key dependencies as production PostgreSQL, so db_rehearse_deletion_plan can prove a deletion order safe before it ever touches real ShopKart data. Never call this with an ambiguous or unresolved account id.', {
+  tool('db_export_subject_snapshot', 'Export one account and every row reachable from it (historical emails, orders, order items, settled refunds, support tickets, uploads, event-log rows matched by known email/IP, and retained refunds referenced by its orders) into a self-contained sandbox SQLite snapshot. The snapshot enforces the same foreign-key dependencies as production PostgreSQL, so db_rehearse_deletion_plan can prove a deletion order safe before it ever touches real ShopKart data. Every call writes a fresh, uniquely named file, even for the same account, so concurrent exports never overwrite or delete each other; always use the returned snapshot_path, never a guessed or reconstructed one. Never call this with an ambiguous or unresolved account id.', {
     account_id: z.coerce.number().int().positive(),
   }, async ({ account_id }) => {
     const accountResult = await pool.query(

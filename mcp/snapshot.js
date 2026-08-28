@@ -14,6 +14,7 @@
  * from, that adapter's TABLES constant.
  */
 import Database from 'better-sqlite3';
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -134,8 +135,15 @@ export function resolveSandboxDir(sandboxDir = process.env.OUBLIETTE_SANDBOX_DIR
   return path.resolve(sandboxDir);
 }
 
+/**
+ * A fresh, cryptographically unique path per call - not just per account - so
+ * concurrent exports for the same account (two overlapping investigations, a
+ * retry racing the original request, etc.) never share a file. Sharing one
+ * deterministic account-<id>.db path let one export's write or delete land on
+ * a snapshot another in-flight export or rehearsal was still relying on.
+ */
 export function sandboxSnapshotPath(accountId, sandboxDir = resolveSandboxDir()) {
-  return path.join(resolveSandboxDir(sandboxDir), `account-${accountId}.db`);
+  return path.join(resolveSandboxDir(sandboxDir), `account-${accountId}-${randomUUID()}.db`);
 }
 
 /** Throws unless filePath resolves inside sandboxDir. Guards db_rehearse_deletion_plan against being pointed at an arbitrary file. */

@@ -99,7 +99,11 @@ backs two ShopKart db tools:
   tickets, uploads, matching event-log rows, and referenced retained refunds)
   into a throwaway SQLite file under `OUBLIETTE_SANDBOX_DIR`
   (`.oubliette/sandbox` by default) that enforces the same foreign keys as
-  production PostgreSQL.
+  production PostgreSQL. Every call writes a fresh, cryptographically unique
+  file - never a deterministic per-account path - so concurrent exports for
+  the same account (two overlapping investigations, a retry racing the
+  original) can never overwrite or delete each other's snapshot. Callers must
+  always use the returned `snapshot_path`, never reconstruct one.
 - `db_rehearse_deletion_plan` tries an ordered list of deletes against that
   snapshot inside a transaction it always rolls back, so rehearsal can never
   mutate the snapshot, let alone real ShopKart data. If the given order hits a

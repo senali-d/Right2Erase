@@ -235,6 +235,10 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
     const rehearsals = [];
     for (const [accountId, actions] of Object.entries(postgresActionsByAccount || {})) {
       if (!actions.length) continue;
+      // Each export gets its own uniquely named snapshot file, even for the
+      // same account, so a concurrent investigation of this account cannot
+      // overwrite or delete the file this rehearsal is using. Always use the
+      // path returned here - never reconstruct or guess one.
       const snapshot = await call('db_export_subject_snapshot', { account_id: Number(accountId) });
       try {
         const outcome = await call('db_rehearse_deletion_plan', {

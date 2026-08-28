@@ -132,6 +132,45 @@ test('sandboxSnapshotPath stays inside the sandbox directory and assertWithinSan
   }
 });
 
+test('sandboxSnapshotPath is unique per call, even for the same account', () => {
+  const dir = tempSandbox();
+  try {
+    const paths = new Set(Array.from({ length: 50 }, () => sandboxSnapshotPath(7, dir)));
+    assert.equal(paths.size, 50);
+    for (const dbPath of paths) assert.equal(path.dirname(dbPath), resolveSandboxDir(dir));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('concurrent exports for the same account never collide: each snapshot survives independently of the others', () => {
+  const dir = tempSandbox();
+  try {
+    // Simulates two overlapping db_export_subject_snapshot calls for account 7
+    // (e.g. two concurrent investigations, or a retry racing the original).
+    const pathA = sandboxSnapshotPath(7, dir);
+    const pathB = sandboxSnapshotPath(7, dir);
+    seedSnapshot(pathA);
+    seedSnapshot(pathB);
+    assert.ok(fs.existsSync(pathA));
+    assert.ok(fs.existsSync(pathB));
+
+    // Cleanup of one export's snapshot must not touch the other's.
+    fs.rmSync(pathA);
+    assert.ok(!fs.existsSync(pathA));
+    assert.ok(fs.existsSync(pathB));
+
+    const outcome = rehearseDeletionPlan({
+      dbPath: pathB,
+      actions: [{ record_type: 'order_item', record_id: 100 }, { record_type: 'refund', record_id: 200 }, { record_type: 'order', record_id: 10 }],
+      autoOrder: false,
+    });
+    assert.equal(outcome.ok, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('assertWithinSandbox rejects a path escaping the sandbox directory', () => {
   const dir = tempSandbox();
   try {
