@@ -133,14 +133,28 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
     for (const account of accountRows) {
       const accountId = account.id || account.account_id;
       if (!accountId) continue;
-      const [emailRows, orders, tickets, uploads, accountObjects] = await Promise.all([
+      const [emailRows, orders, tickets, linkedUploads, orphanedUploads, accountObjects] = await Promise.all([
         fetchAllAccountEmails(accountId),
         call('db_list_orders', { account_id: accountId }),
         call('db_list_support_tickets', { account_id: accountId }),
         call('db_search_uploads', { account_id: accountId }),
+        // uploads index rows can exist with account_id NULL and no FK back to
+        // the account at all - the only surviving link is the account's key
+        // prefix inside the object path, so an account_id lookup alone misses
+        // them. Search by that prefix too and merge, deduped by row id.
+        call('db_search_uploads', { object_prefix: `uploads/acct_${accountId}/` }),
         call('storage_list_objects', { prefix: `uploads/acct_${accountId}/` }),
       ]);
       collectMinioObjects(`account ${accountId}`, accountObjects);
+      const uploadRows = new Map();
+      for (const row of rowsOf(linkedUploads)) uploadRows.set(row.id, row);
+      // The prefix search recovers orphaned rows (account_id IS NULL); it must
+      // never be trusted to add a row already linked to a different account,
+      // so only its NULL-account_id results are merged in here.
+      for (const row of rowsOf(orphanedUploads)) {
+        if (row.account_id == null) uploadRows.set(row.id, row);
+      }
+      const uploads = [...uploadRows.values()];
       const orderRows = rowsOf(orders);
       const orderIds = orderRows.map((order) => order.id).filter(Boolean);
       const orderNumbers = orderRows.map((order) => order.order_number).filter(Boolean);

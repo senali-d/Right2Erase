@@ -111,14 +111,20 @@ function createServer() {
     const { rows } = await pool.query('SELECT id, account_id, subject, body, status, created_at FROM support_tickets WHERE account_id=$1 ORDER BY id', [account_id]);
     return result(rows);
   });
-  tool('db_search_uploads', 'Find upload index records by account id or object-key prefix, including orphaned records.', {
+  tool('db_search_uploads', 'Find upload index records by account id, or recover orphaned records (account_id IS NULL) by their object-key prefix.', {
     account_id: z.coerce.number().int().positive().optional(), object_prefix: z.string().min(1).max(300).optional(),
   }, async ({ account_id, object_prefix }) => {
     if (account_id == null && !object_prefix) throw new Error('account_id or object_prefix is required');
     const escapedPrefix = object_prefix ? escapeLike(object_prefix) : null;
+    // The prefix search exists only to recover orphaned rows a plain account_id
+    // lookup can't reach - it must never surface a row already linked to a
+    // different account, so it is scoped to account_id IS NULL, matching the
+    // same orphan predicate the snapshot exporter and truth manifest use.
     const { rows } = await pool.query(
       `SELECT id, account_id, object_key, kind, bytes, created_at FROM uploads
-       WHERE ($1::int IS NOT NULL AND account_id=$1) OR ($2::text IS NOT NULL AND object_key LIKE $2 || '%' ESCAPE '\\') ORDER BY id`,
+       WHERE ($1::int IS NOT NULL AND account_id=$1)
+          OR ($2::text IS NOT NULL AND account_id IS NULL AND object_key LIKE $2 || '%' ESCAPE '\\')
+       ORDER BY id`,
       [account_id ?? null, escapedPrefix],
     );
     return result(rows);
@@ -151,11 +157,15 @@ function createServer() {
     const orderNumbers = orders.rows.map((order) => order.order_number);
     const knownEmails = [...new Set([account.email, ...emails.rows.map((row) => row.email)])];
 
-    const [items, refunds, tickets, uploads, events, retained] = await Promise.all([
+    const [items, refunds, tickets, linkedUploads, orphanedUploads, events, retained] = await Promise.all([
       orderIds.length ? pool.query('SELECT id, order_id, sku, product_name, qty, price_cents FROM order_items WHERE order_id = ANY($1::int[]) ORDER BY id', [orderIds]) : { rows: [] },
       orderIds.length ? pool.query("SELECT id, order_id, amount_cents, status, reason, opened_at, settled_at FROM refunds WHERE order_id = ANY($1::int[]) ORDER BY id", [orderIds]) : { rows: [] },
       pool.query('SELECT id, account_id, subject, body, status, created_at FROM support_tickets WHERE account_id=$1 ORDER BY id', [account_id]),
       pool.query('SELECT id, account_id, object_key, kind, bytes, created_at FROM uploads WHERE account_id=$1 ORDER BY id', [account_id]),
+      // An upload row can have account_id NULL and no FK back to the account
+      // at all - the only surviving link is the account's key prefix inside
+      // the object path - so a plain account_id lookup misses it.
+      pool.query('SELECT id, account_id, object_key, kind, bytes, created_at FROM uploads WHERE account_id IS NULL AND object_key LIKE $1 ORDER BY id', [`uploads/acct_${account_id}/%`]),
       pool.query(
         `SELECT id, ts, email, ip_address, method, path, status_code, user_agent FROM event_log
          WHERE email = ANY($1::text[]) OR ($2::inet IS NOT NULL AND ip_address=$2) ORDER BY ts, id`,
@@ -163,6 +173,7 @@ function createServer() {
       ),
       orderNumbers.length ? pool.query('SELECT id, source_order_number, amount_cents, reason, opened_at, retained_at FROM retained_refunds WHERE source_order_number = ANY($1::text[]) ORDER BY id', [orderNumbers]) : { rows: [] },
     ]);
+    const uploads = { rows: [...linkedUploads.rows, ...orphanedUploads.rows] };
 
     const snapshotId = randomUUID();
     const dbPath = sandboxSnapshotPath(account_id, sandboxDir);
