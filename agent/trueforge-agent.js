@@ -18,9 +18,15 @@ export const DISCOVERY_TOOLS = new Set([
   'db_list_support_tickets', 'db_search_uploads', 'db_search_event_log',
   'storage_list_objects', 'storage_get_object_metadata', 'storage_search_objects',
   'billing_find_customer', 'billing_get_customer', 'billing_list_charges',
-  'billing_preview_erase', 'db_export_subject_snapshot', 'db_rehearse_deletion_plan',
-  'db_delete_snapshot',
+  'billing_preview_erase', 'db_export_subject_snapshot', 'db_stage_deletion_actions',
+  'db_rehearse_deletion_plan', 'db_delete_snapshot',
 ]);
+
+// Chunk size for db_stage_deletion_actions calls - comfortably under the
+// server's default per-call cap (see MCP_DB_MAX_REHEARSAL_CHUNK in
+// mcp/database-server.js) so a large discovered account's action set is
+// always transmittable, no matter how many chunks that takes.
+const STAGE_CHUNK_SIZE = 1000;
 
 export const OUBLIETTE_TOOLS = new Set([
   'case_create', 'case_get', 'case_list', 'finding_add', 'case_complete_discovery',
@@ -119,7 +125,9 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
     // Postgres erase actions for each account, in the same order they are
     // recorded as findings below - deliberately not leaf-to-root, so the
     // sandbox rehearsal in prepare() has a real ordering mistake to catch
-    // (e.g. an order recorded before its order_items).
+    // (e.g. an order recorded before its order_items). Left unbounded here on
+    // purpose: rehearsePlan() below stages this in chunks, so a large
+    // discovered account is never truncated to fit one request.
     const postgresActionsByAccount = {};
 
     for (const account of accountRows) {
@@ -247,8 +255,21 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       // snapshot behind it is fully written.
       const snapshot = await call('db_export_subject_snapshot', { account_id: Number(accountId) });
       try {
+        // Stage in bounded chunks, in order, rather than sending the whole
+        // action list in one call: a large discovered account (thousands of
+        // order_items, event_log rows, etc.) would otherwise exceed the
+        // server's per-request size cap and become permanently unpreparable.
+        // Chunks are staged sequentially, not concurrently, so their order on
+        // the server matches this array's order exactly - the rehearsal that
+        // follows still runs as one single transaction over the complete,
+        // correctly ordered set; only how the actions get there is chunked.
+        for (let i = 0; i < actions.length; i += STAGE_CHUNK_SIZE) {
+          await call('db_stage_deletion_actions', {
+            snapshot_id: snapshot.snapshot_id, actions: actions.slice(i, i + STAGE_CHUNK_SIZE),
+          });
+        }
         const outcome = await call('db_rehearse_deletion_plan', {
-          snapshot_id: snapshot.snapshot_id, actions, auto_order: true,
+          snapshot_id: snapshot.snapshot_id, auto_order: true,
         });
         if (!outcome.ok) {
           throw new Error(`sandbox rehearsal failed for account ${accountId}: ${JSON.stringify(outcome.attempts)}`);

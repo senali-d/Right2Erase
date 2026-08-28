@@ -27,6 +27,14 @@ function positiveInteger(value, fallback) {
 // bound here, a caller partitioning the full list into event-log batches has
 // no upper limit on how many batches it ends up issuing.
 const maxAccountEmails = positiveInteger(process.env.MCP_DB_MAX_ACCOUNT_EMAILS || process.env.MCP_MAX_RESULTS, 500);
+// Bounds one db_stage_deletion_actions call's request size, not the logical
+// size of a rehearsal: a caller stages an arbitrarily large discovered action
+// set across as many chunked calls as it takes, each capped at this size, and
+// db_rehearse_deletion_plan then runs one transactional rehearsal over
+// everything staged. maxStagedActions is the only true ceiling on how large a
+// single account's rehearsal can be.
+const maxRehearsalChunkSize = positiveInteger(process.env.MCP_DB_MAX_REHEARSAL_CHUNK, 5000);
+const maxStagedActions = positiveInteger(process.env.MCP_DB_MAX_STAGED_ACTIONS, 200000);
 
 const sandboxDir = resolveSandboxDir();
 
@@ -40,13 +48,14 @@ function createServer() {
     description, inputSchema, annotations,
   }, handler);
 
-  // Maps opaque snapshot_id -> the real sandbox path it was exported to.
-  // db_rehearse_deletion_plan and db_delete_snapshot accept only an id looked
-  // up here, never a path string from the caller, so neither tool can ever be
-  // pointed at a file this process did not itself just export - a symlink
-  // placed inside the sandbox directory has no id to be reached through.
-  // Scoped to this session's server instance; ids from one session are
-  // meaningless in another.
+  // Maps opaque snapshot_id -> { path, actions }: the real sandbox path it
+  // was exported to, and the delete actions staged for it so far via
+  // db_stage_deletion_actions. db_rehearse_deletion_plan and db_delete_snapshot
+  // accept only an id looked up here, never a path string from the caller, so
+  // neither tool can ever be pointed at a file this process did not itself
+  // just export - a symlink placed inside the sandbox directory has no id to
+  // be reached through. Scoped to this session's server instance; ids from
+  // one session are meaningless in another.
   const snapshots = new Map();
 
   tool('db_find_accounts', 'Find accounts by exact email (current or historical) or exact display name. Never use name alone to select a deletion target. account_emails has no cross-account uniqueness constraint, so a historical address can resolve to more than one account; check matched_via on every row and treat multiple distinct accounts as a collision to resolve manually, not a set of deletion targets.', {
@@ -125,7 +134,7 @@ function createServer() {
     );
     return result(rows);
   });
-  tool('db_export_subject_snapshot', 'Export one account and every row reachable from it (historical emails, orders, order items, settled refunds, support tickets, uploads, event-log rows matched by known email/IP, and retained refunds referenced by its orders) into a self-contained sandbox SQLite snapshot. The snapshot enforces the same foreign-key dependencies as production PostgreSQL, so db_rehearse_deletion_plan can prove a deletion order safe before it ever touches real ShopKart data. Every call writes a fresh, uniquely named file, even for the same account, so concurrent exports never overwrite or delete each other. Returns snapshot_id: pass that opaque token, not snapshot_path, to db_rehearse_deletion_plan and db_delete_snapshot - those tools accept only an id this server issued, never a path. Never call this with an ambiguous or unresolved account id.', {
+  tool('db_export_subject_snapshot', `Export one account and every row reachable from it (historical emails, orders, order items, settled refunds, support tickets, uploads, event-log rows matched by known email/IP, and retained refunds referenced by its orders) into a self-contained sandbox SQLite snapshot. The snapshot enforces the same foreign-key dependencies as production PostgreSQL, so db_rehearse_deletion_plan can prove a deletion order safe before it ever touches real ShopKart data. Every call writes a fresh, uniquely named file, even for the same account, so concurrent exports never overwrite or delete each other. Returns snapshot_id: pass that opaque token, not snapshot_path, to db_stage_deletion_actions, db_rehearse_deletion_plan, and db_delete_snapshot - those tools accept only an id this server issued, never a path. A large discovered account's delete actions do not fit one db_stage_deletion_actions call (each is capped at ${maxRehearsalChunkSize}); call it repeatedly with successive chunks, in order, before calling db_rehearse_deletion_plan. Never call this with an ambiguous or unresolved account id.`, {
     account_id: z.coerce.number().int().positive(),
   }, async ({ account_id }) => {
     const accountResult = await pool.query(
@@ -165,28 +174,41 @@ function createServer() {
         uploads: uploads.rows, event_log: events.rows, retained_refunds: retained.rows,
       },
     });
-    snapshots.set(snapshotId, dbPath);
+    snapshots.set(snapshotId, { path: dbPath, actions: [] });
     return result({ account_id, snapshot_id: snapshotId, snapshot_path: dbPath, counts });
   }, sandboxWrite);
-  tool('db_rehearse_deletion_plan', "Rehearse an ordered list of deletes against a sandbox snapshot from db_export_subject_snapshot, addressed by the snapshot_id that call returned - not a path. Every attempt runs inside a transaction that is always rolled back, so rehearsal never mutates the snapshot and never touches real ShopKart data. If the given order hits a foreign-key violation (for example deleting an order before its order_items) and auto_order is not set to false, a second attempt is made in the known leaf-to-root order and both attempts are returned. Call this after plan_create and before requesting human approval; do not request approval for a plan that fails rehearsal.", {
+  tool('db_stage_deletion_actions', `Append a chunk of planned delete actions (at most ${maxRehearsalChunkSize} per call) to a snapshot from db_export_subject_snapshot, addressed by snapshot_id. Call this once for a small discovered set, or repeatedly with successive chunks - in the exact order they belong in - to load a large one; each call only bounds its own request size, not the total staged, up to ${maxStagedActions} actions per snapshot. Nothing is rehearsed yet. Call db_rehearse_deletion_plan once every chunk has been staged to run one transactional rehearsal over the complete set.`, {
     snapshot_id: z.string().uuid(),
     actions: z.array(z.object({
       record_type: z.string().min(1),
       record_id: z.union([z.string(), z.number()]),
-    })).min(1).max(5000),
+    })).min(1).max(maxRehearsalChunkSize),
+  }, async ({ snapshot_id, actions }) => {
+    const snapshot = snapshots.get(snapshot_id);
+    if (!snapshot) throw new Error(`unknown snapshot_id: ${snapshot_id}`);
+    if (snapshot.actions.length + actions.length > maxStagedActions) {
+      throw new Error(`staging ${actions.length} more action(s) would exceed the ${maxStagedActions}-action limit for this snapshot (${snapshot.actions.length} already staged)`);
+    }
+    snapshot.actions.push(...actions);
+    return result({ snapshot_id, staged_count: snapshot.actions.length });
+  }, sandboxWrite);
+  tool('db_rehearse_deletion_plan', 'Rehearse every action staged for a snapshot via db_stage_deletion_actions (call that one or more times first - this tool takes no actions itself, so there is no cap on how large a rehearsal it can run). Runs inside a transaction that is always rolled back, so rehearsal never mutates the snapshot and never touches real ShopKart data. If the staged order hits a foreign-key violation (for example deleting an order before its order_items) and auto_order is not set to false, a second attempt is made in the known leaf-to-root order and both attempts are returned. Consumes everything staged for this snapshot_id, whether the rehearsal succeeds or fails; re-stage before rehearsing again. Call this after plan_create and before requesting human approval; do not request approval for a plan that fails rehearsal.', {
+    snapshot_id: z.string().uuid(),
     auto_order: z.boolean().optional(),
-  }, async ({ snapshot_id, actions, auto_order }) => {
-    const dbPath = snapshots.get(snapshot_id);
-    if (!dbPath) throw new Error(`unknown snapshot_id: ${snapshot_id}`);
-    const resolved = assertWithinSandbox(dbPath, sandboxDir);
-    return result(rehearseDeletionPlan({ dbPath: resolved, actions, autoOrder: auto_order !== false }));
+  }, async ({ snapshot_id, auto_order }) => {
+    const snapshot = snapshots.get(snapshot_id);
+    if (!snapshot) throw new Error(`unknown snapshot_id: ${snapshot_id}`);
+    const resolved = assertWithinSandbox(snapshot.path, sandboxDir);
+    const outcome = rehearseDeletionPlan({ dbPath: resolved, actions: snapshot.actions, autoOrder: auto_order !== false });
+    snapshot.actions = [];
+    return result(outcome);
   });
   tool('db_delete_snapshot', 'Delete a sandbox snapshot previously written by db_export_subject_snapshot, addressed by the snapshot_id that call returned - not a path. Call this once rehearsal for that account is finished (whether it passed or failed) so the exported PII copy does not outlive the rehearsal that needed it. A no-op if the id is unknown or was already deleted.', {
     snapshot_id: z.string().uuid(),
   }, async ({ snapshot_id }) => {
-    const dbPath = snapshots.get(snapshot_id);
-    if (!dbPath) return result({ snapshot_id, deleted: false });
-    const resolved = assertWithinSandbox(dbPath, sandboxDir);
+    const snapshot = snapshots.get(snapshot_id);
+    if (!snapshot) return result({ snapshot_id, deleted: false });
+    const resolved = assertWithinSandbox(snapshot.path, sandboxDir);
     deleteSnapshot(resolved);
     snapshots.delete(snapshot_id);
     return result({ snapshot_id, deleted: true });

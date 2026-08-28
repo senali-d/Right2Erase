@@ -92,7 +92,7 @@ path.
 ## Sandbox rehearsal
 
 Before a plan ever reaches a human, `prepare()` rehearses it. `mcp/snapshot.js`
-backs two ShopKart db tools:
+backs four ShopKart db tools:
 
 - `db_export_subject_snapshot` copies one account and everything reachable
   from it (historical emails, orders, order items, settled refunds, support
@@ -113,19 +113,30 @@ backs two ShopKart db tools:
   is still checked with `assertWithinSandbox` before use, which resolves
   symlinks (`fs.realpathSync`) and rejects anything that isn't a plain regular
   file, as defense in depth.
-- `db_rehearse_deletion_plan` tries an ordered list of deletes against that
-  snapshot inside a transaction it always rolls back, so rehearsal can never
-  mutate the snapshot, let alone real ShopKart data. If the given order hits a
+- `db_stage_deletion_actions` appends a chunk of planned delete actions
+  (`MCP_DB_MAX_REHEARSAL_CHUNK`, default 5000, per call) to a snapshot's
+  server-side pending list, up to `MCP_DB_MAX_STAGED_ACTIONS` (default
+  200,000) staged actions total. Nothing is rehearsed by staging alone; call
+  it once for a small account or repeatedly, in order, for a large one. This
+  is what lets a large discovered account (thousands of order_items,
+  event-log rows, etc.) stay preparable at all: the per-call cap only bounds
+  one request's size, never the logical size of the rehearsal - splitting the
+  transmission never splits or truncates the transaction that follows.
+- `db_rehearse_deletion_plan` runs one transactional rehearsal over
+  everything staged for a snapshot (it takes no actions of its own), inside a
+  transaction it always rolls back, so rehearsal can never mutate the
+  snapshot, let alone real ShopKart data. If the staged order hits a
   foreign-key violation, it retries once in the known leaf-to-root order and
-  reports both attempts.
+  reports both attempts. Consumes what was staged either way.
 - `db_delete_snapshot` removes a snapshot file. The agent calls this
   immediately after each account's rehearsal finishes, whether it passed or
   failed, so the exported PII copy never outlives the rehearsal it existed
   for.
 
-The agent's `prepare()` calls export, rehearse, and delete for every
-discovered account right after `plan_create`, and refuses to return a plan
-for approval if rehearsal never succeeds. In the seeded fixture this
+The agent's `prepare()` calls export, stage (in `STAGE_CHUNK_SIZE`-sized
+chunks), rehearse, and delete for every discovered account right after
+`plan_create`, and refuses to return a plan for approval if rehearsal never
+succeeds. In the seeded fixture this
 exercises a real foreign-key failure and its auto-order retry: findings (and
 therefore the plan's action order) record an account's orders before their
 order items and refunds, so the first rehearsal attempt fails with `FOREIGN

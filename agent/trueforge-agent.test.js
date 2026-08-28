@@ -60,6 +60,7 @@ function rowsResponder(overrides = {}) {
     db_export_subject_snapshot: async ({ account_id }) => ({
       account_id, snapshot_id: `snap-${account_id}`, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {},
     }),
+    db_stage_deletion_actions: async ({ snapshot_id }) => ({ snapshot_id, staged_count: 0 }),
     db_rehearse_deletion_plan: async () => ({ ok: true, attempts: [{ order: 'as_planned', ok: true, steps: 0 }] }),
     db_delete_snapshot: async ({ snapshot_id }) => ({ snapshot_id, deleted: true }),
     ...overrides,
@@ -297,39 +298,79 @@ test('a truncated db_get_account_emails page with no next_cursor refuses to plan
   assert.deepEqual(calls, []);
 });
 
-test('prepare() exports a sandbox snapshot and rehearses the plan for every discovered account', async () => {
+test('prepare() exports a sandbox snapshot, stages its actions, and rehearses every discovered account', async () => {
   const calls = [];
+  const staged = [];
   const callTool = rowsResponder({
     db_find_accounts: async () => ({ rows: [{ id: 42 }] }),
     db_export_subject_snapshot: async ({ account_id }) => {
       calls.push(['db_export_subject_snapshot', account_id]);
       return { account_id, snapshot_id: `snap-${account_id}`, snapshot_path: `/sandbox/account-${account_id}.db`, counts: {} };
     },
-    db_rehearse_deletion_plan: async (args) => {
-      calls.push(['db_rehearse_deletion_plan', args]);
-      return { ok: true, attempts: [{ order: 'as_planned', ok: true, steps: args.actions.length }] };
+    db_stage_deletion_actions: async ({ snapshot_id, actions }) => {
+      calls.push(['db_stage_deletion_actions', snapshot_id, actions.length]);
+      staged.push(...actions);
+      return { snapshot_id, staged_count: staged.length };
+    },
+    db_rehearse_deletion_plan: async ({ snapshot_id, auto_order }) => {
+      calls.push(['db_rehearse_deletion_plan', snapshot_id, auto_order]);
+      return { ok: true, attempts: [{ order: 'as_planned', ok: true, steps: staged.length }] };
     },
   });
 
   const agent = createTrueForgeAgent({ callTool });
   const prepared = await agent.prepare({ subject_email: 'subject@example.com' });
 
-  const [exportCall, rehearseCall] = calls;
+  const [exportCall, stageCall, rehearseCall] = calls;
   assert.deepEqual(exportCall, ['db_export_subject_snapshot', 42]);
-  assert.equal(rehearseCall[0], 'db_rehearse_deletion_plan');
-  // Rehearsal is addressed by the opaque id the export returned, never a path.
-  assert.equal(rehearseCall[1].snapshot_id, 'snap-42');
-  assert.equal(rehearseCall[1].snapshot_path, undefined);
-  // The account itself is always in the rehearsed action set, even with no
-  // other postgres records discovered for it.
-  assert.ok(rehearseCall[1].actions.some((action) => action.record_type === 'account' && action.record_id === 42));
+  assert.equal(stageCall[0], 'db_stage_deletion_actions');
+  assert.equal(stageCall[1], 'snap-42');
+  // Rehearsal is addressed by the opaque id the export returned, and no
+  // longer carries actions itself - those were staged separately.
+  assert.deepEqual(rehearseCall, ['db_rehearse_deletion_plan', 'snap-42', true]);
+  // The account itself is always staged, even with no other postgres records
+  // discovered for it.
+  assert.ok(staged.some((action) => action.record_type === 'account' && action.record_id === 42));
   assert.deepEqual(prepared.rehearsal, [{
     account_id: 42, snapshot_id: 'snap-42', snapshot_path: '/sandbox/account-42.db',
-    attempts: [{ order: 'as_planned', ok: true, steps: rehearseCall[1].actions.length }],
+    attempts: [{ order: 'as_planned', ok: true, steps: staged.length }],
   }]);
   // The internal per-account action map used to drive rehearsal must not leak
   // into the prepared result handed back to the caller.
   assert.equal(prepared.postgres_actions_by_account, undefined);
+});
+
+test('prepare() chunks a large discovered account across multiple db_stage_deletion_actions calls instead of truncating or failing', async () => {
+  const ORDER_COUNT = 2500; // comfortably more than one STAGE_CHUNK_SIZE (1000)
+  const stageCallSizes = [];
+  const staged = [];
+  const callTool = rowsResponder({
+    db_find_accounts: async () => ({ rows: [{ id: 42 }] }),
+    db_list_orders: async () => ({
+      rows: Array.from({ length: ORDER_COUNT }, (_, i) => ({ id: i + 1, account_id: 42, order_number: `ORD-${i + 1}` })),
+    }),
+    db_list_order_items: async () => ({ rows: [] }),
+    db_list_refunds: async () => ({ rows: [] }),
+    db_list_retained_refunds: async () => ({ rows: [] }),
+    db_stage_deletion_actions: async ({ snapshot_id, actions }) => {
+      stageCallSizes.push(actions.length);
+      staged.push(...actions);
+      return { snapshot_id, staged_count: staged.length };
+    },
+    db_rehearse_deletion_plan: async () => ({ ok: true, attempts: [{ order: 'as_planned', ok: true, steps: staged.length }] }),
+  });
+
+  const agent = createTrueForgeAgent({ callTool });
+  const prepared = await agent.prepare({ subject_email: 'subject@example.com' });
+
+  // A single account with more actions than fit in one chunk must still
+  // become fully preparable: split across several bounded calls, never
+  // rejected outright and never silently dropped.
+  assert.ok(stageCallSizes.length > 1);
+  for (const size of stageCallSizes) assert.ok(size <= 1000);
+  assert.equal(stageCallSizes.reduce((a, b) => a + b, 0), ORDER_COUNT + 1); // + the account itself
+  assert.equal(staged.filter((action) => action.record_type === 'order').length, ORDER_COUNT);
+  assert.equal(prepared.rehearsal[0].attempts[0].steps, ORDER_COUNT + 1);
 });
 
 test('prepare() refuses to hand a plan to approval when sandbox rehearsal never succeeds', async () => {
