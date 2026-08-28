@@ -176,20 +176,38 @@ function insertRows(db, table, rows) {
 /**
  * Write a fresh, self-contained sandbox snapshot. tables maps table name to
  * an array of plain row objects (as returned by the pg driver); any table
- * omitted is treated as empty. Always overwrites dbPath.
+ * omitted is treated as empty.
+ *
+ * Schema creation and every insert happen on a private temporary file next to
+ * dbPath; only a fully populated snapshot is ever renamed onto dbPath, and
+ * that rename is atomic (replacing any existing file at dbPath in one step).
+ * If anything fails partway, the temporary file is removed and the original
+ * error is rethrown - a failed export can never leave a partial PII snapshot
+ * at dbPath for something outside this function to find later.
  */
 export function writeSubjectSnapshot({ dbPath, tables }) {
-  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
-  if (fs.existsSync(dbPath)) fs.rmSync(dbPath);
-  const db = new Database(dbPath);
+  const dir = path.dirname(dbPath);
+  fs.mkdirSync(dir, { recursive: true });
+  const tempPath = path.join(dir, `.${path.basename(dbPath)}.${randomUUID()}.tmp`);
+  let db;
   try {
+    db = new Database(tempPath);
     db.pragma('foreign_keys = ON');
     db.exec(SCHEMA_SQL);
     const counts = {};
     for (const table of TABLE_COLUMNS.keys()) counts[table] = insertRows(db, table, tables[table] || []);
-    return counts;
-  } finally {
     db.close();
+    db = null;
+    fs.renameSync(tempPath, dbPath);
+    return counts;
+  } catch (error) {
+    if (db) {
+      try { db.close(); } catch { /* preserve the original error */ }
+    }
+    try {
+      if (fs.existsSync(tempPath)) fs.rmSync(tempPath);
+    } catch { /* preserve the original error */ }
+    throw error;
   }
 }
 

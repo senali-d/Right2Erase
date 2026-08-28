@@ -238,7 +238,10 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       // Each export gets its own uniquely named snapshot file, even for the
       // same account, so a concurrent investigation of this account cannot
       // overwrite or delete the file this rehearsal is using. Always use the
-      // path returned here - never reconstruct or guess one.
+      // path returned here - never reconstruct or guess one. If the export
+      // itself throws, it never returns a path, so there is nothing here for
+      // this loop to clean up: db_export_subject_snapshot only ever hands
+      // back a path once the snapshot behind it is fully written.
       const snapshot = await call('db_export_subject_snapshot', { account_id: Number(accountId) });
       try {
         const outcome = await call('db_rehearse_deletion_plan', {

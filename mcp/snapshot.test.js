@@ -38,6 +38,59 @@ test('writeSubjectSnapshot creates a fresh SQLite file with foreign keys enforce
   }
 });
 
+test('writeSubjectSnapshot never leaves a partial file behind when a write fails', () => {
+  const dir = tempSandbox();
+  try {
+    const dbPath = path.join(dir, 'account-1.db');
+    assert.throws(() => writeSubjectSnapshot({
+      dbPath,
+      tables: {
+        // order_items references an order that was never inserted, so the
+        // foreign key fails partway through the write.
+        order_items: [{ id: 100, order_id: 999, sku: 'SK-1', product_name: 'Shirt', qty: 1, price_cents: 1000 }],
+      },
+    }), /FOREIGN KEY/i);
+
+    assert.ok(!fs.existsSync(dbPath));
+    // No stray temporary file left behind in the sandbox directory either.
+    assert.deepEqual(fs.readdirSync(dir), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeSubjectSnapshot leaves no temporary file behind after a successful export', () => {
+  const dir = tempSandbox();
+  try {
+    const dbPath = path.join(dir, 'account-1.db');
+    seedSnapshot(dbPath);
+    assert.deepEqual(fs.readdirSync(dir), ['account-1.db']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('writeSubjectSnapshot atomically replaces an existing file at dbPath on success', () => {
+  const dir = tempSandbox();
+  try {
+    const dbPath = path.join(dir, 'account-1.db');
+    seedSnapshot(dbPath);
+
+    const counts = writeSubjectSnapshot({
+      dbPath,
+      tables: {
+        accounts: [{ id: 2, email: 'someone-else@example.com', full_name: 'Someone Else', country: 'US', last_seen_ip: null, created_at: '2024-02-01T00:00:00.000Z' }],
+      },
+    });
+
+    assert.equal(counts.accounts, 1);
+    assert.equal(counts.orders, 0);
+    assert.deepEqual(fs.readdirSync(dir), ['account-1.db']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('rehearseDeletionPlan reports a foreign-key violation when the order is wrong', () => {
   const dir = tempSandbox();
   try {
