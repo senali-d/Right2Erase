@@ -18,8 +18,15 @@ export const DISCOVERY_TOOLS = new Set([
   'db_list_support_tickets', 'db_search_uploads', 'db_search_event_log',
   'storage_list_objects', 'storage_get_object_metadata', 'storage_search_objects',
   'billing_find_customer', 'billing_get_customer', 'billing_list_charges',
-  'billing_preview_erase',
+  'billing_preview_erase', 'db_export_subject_snapshot', 'db_stage_deletion_actions',
+  'db_rehearse_deletion_plan', 'db_delete_snapshot',
 ]);
+
+// Chunk size for db_stage_deletion_actions calls - comfortably under the
+// server's default per-call cap (see MCP_DB_MAX_REHEARSAL_CHUNK in
+// mcp/database-server.js) so a large discovered account's action set is
+// always transmittable, no matter how many chunks that takes.
+const STAGE_CHUNK_SIZE = 1000;
 
 export const OUBLIETTE_TOOLS = new Set([
   'case_create', 'case_get', 'case_list', 'finding_add', 'case_complete_discovery',
@@ -115,6 +122,14 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       }
     }
 
+    // Postgres erase actions for each account, in the same order they are
+    // recorded as findings below - deliberately not leaf-to-root, so the
+    // sandbox rehearsal in prepare() has a real ordering mistake to catch
+    // (e.g. an order recorded before its order_items). Left unbounded here on
+    // purpose: rehearsePlan() below stages this in chunks, so a large
+    // discovered account is never truncated to fit one request.
+    const postgresActionsByAccount = {};
+
     for (const account of accountRows) {
       const accountId = account.id || account.account_id;
       if (!accountId) continue;
@@ -176,6 +191,17 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
         addRowFindings(rowsOf(logs), 'event'),
       ]);
       await call('finding_add', { case_id: caseId, system: 'postgres', record_type: 'account', record_id: accountId, metadata: { account }, disposition: 'erase' });
+
+      postgresActionsByAccount[accountId] = [
+        ...emailRows.map((row) => ({ record_type: 'account_email', record_id: row.id })),
+        ...orderRows.map((row) => ({ record_type: 'order', record_id: row.id })),
+        ...rowsOf(items).map((row) => ({ record_type: 'order_item', record_id: row.id })),
+        ...rowsOf(refunds).map((row) => ({ record_type: 'refund', record_id: row.id })),
+        ...rowsOf(tickets).map((row) => ({ record_type: 'support_ticket', record_id: row.id })),
+        ...rowsOf(uploads).map((row) => ({ record_type: 'upload', record_id: row.id })),
+        ...logs.map((row) => ({ record_type: 'event', record_id: row.id })),
+        { record_type: 'account', record_id: accountId },
+      ];
     }
 
     for (const customer of customerRows) {
@@ -204,14 +230,69 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
     // throws (e.g. a truncated storage query), this is never reached and
     // plan_create permanently refuses to build a plan from the partial case.
     await call('case_complete_discovery', { case_id: caseId });
-    return { case_id: caseId, accounts, customers, case: caseRecord };
+    return {
+      case_id: caseId, accounts, customers, case: caseRecord, postgres_actions_by_account: postgresActionsByAccount,
+    };
+  }
+
+  // Export a sandbox snapshot per account and rehearse that account's planned
+  // Postgres deletes against it before any human ever sees the plan. A plan
+  // that cannot be rehearsed cleanly (even after falling back to the known
+  // leaf-to-root order) must never reach request_approval.
+  async function rehearsePlan(postgresActionsByAccount) {
+    const rehearsals = [];
+    for (const [accountId, actions] of Object.entries(postgresActionsByAccount || {})) {
+      if (!actions.length) continue;
+      // Each export gets its own uniquely named snapshot file, even for the
+      // same account, addressed only by the opaque snapshot_id it returns -
+      // never a path. A concurrent investigation of this account cannot
+      // overwrite or delete the file this rehearsal is using, and neither
+      // this agent nor anything it talks to can point db_rehearse_deletion_plan
+      // or db_delete_snapshot at an arbitrary file, because those tools only
+      // accept an id the server itself issued. If the export itself throws,
+      // it never returns an id, so there is nothing here for this loop to
+      // clean up: db_export_subject_snapshot only hands back an id once the
+      // snapshot behind it is fully written.
+      const snapshot = await call('db_export_subject_snapshot', { account_id: Number(accountId) });
+      try {
+        // Stage in bounded chunks, in order, rather than sending the whole
+        // action list in one call: a large discovered account (thousands of
+        // order_items, event_log rows, etc.) would otherwise exceed the
+        // server's per-request size cap and become permanently unpreparable.
+        // Chunks are staged sequentially, not concurrently, so their order on
+        // the server matches this array's order exactly - the rehearsal that
+        // follows still runs as one single transaction over the complete,
+        // correctly ordered set; only how the actions get there is chunked.
+        for (let i = 0; i < actions.length; i += STAGE_CHUNK_SIZE) {
+          await call('db_stage_deletion_actions', {
+            snapshot_id: snapshot.snapshot_id, actions: actions.slice(i, i + STAGE_CHUNK_SIZE),
+          });
+        }
+        const outcome = await call('db_rehearse_deletion_plan', {
+          snapshot_id: snapshot.snapshot_id, auto_order: true,
+        });
+        if (!outcome.ok) {
+          throw new Error(`sandbox rehearsal failed for account ${accountId}: ${JSON.stringify(outcome.attempts)}`);
+        }
+        rehearsals.push({
+          account_id: Number(accountId), snapshot_id: snapshot.snapshot_id, snapshot_path: snapshot.snapshot_path, attempts: outcome.attempts,
+        });
+      } finally {
+        // The exported snapshot is a full PII copy of the subject's reachable
+        // data; it must not outlive the rehearsal it existed for, regardless
+        // of whether that rehearsal passed or failed.
+        await call('db_delete_snapshot', { snapshot_id: snapshot.snapshot_id });
+      }
+    }
+    return rehearsals;
   }
 
   return {
     async prepare(request) {
-      const investigation = await openAndInvestigate(request);
+      const { postgres_actions_by_account: postgresActionsByAccount, ...investigation } = await openAndInvestigate(request);
       const plan = await call('plan_create', { case_id: investigation.case_id });
-      return { ...investigation, plan, awaiting_approval: true };
+      const rehearsal = await rehearsePlan(postgresActionsByAccount);
+      return { ...investigation, plan, rehearsal, awaiting_approval: true };
     },
 
     async executeApproved({ case_id, plan_hash, approved_by }) {

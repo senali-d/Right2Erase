@@ -10,6 +10,7 @@
     "db_find_accounts", "db_get_account_emails", "db_list_orders",
     "db_list_order_items", "db_list_refunds", "db_list_retained_refunds",
     "db_list_support_tickets", "db_search_uploads", "db_search_event_log",
+    "db_export_subject_snapshot", "db_stage_deletion_actions", "db_rehearse_deletion_plan", "db_delete_snapshot",
     "storage_list_objects", "storage_get_object_metadata", "storage_search_objects",
     "billing_find_customer", "billing_get_customer", "billing_list_charges",
     "billing_preview_erase"
