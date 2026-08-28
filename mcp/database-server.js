@@ -111,14 +111,20 @@ function createServer() {
     const { rows } = await pool.query('SELECT id, account_id, subject, body, status, created_at FROM support_tickets WHERE account_id=$1 ORDER BY id', [account_id]);
     return result(rows);
   });
-  tool('db_search_uploads', 'Find upload index records by account id or object-key prefix, including orphaned records.', {
+  tool('db_search_uploads', 'Find upload index records by account id, or recover orphaned records (account_id IS NULL) by their object-key prefix.', {
     account_id: z.coerce.number().int().positive().optional(), object_prefix: z.string().min(1).max(300).optional(),
   }, async ({ account_id, object_prefix }) => {
     if (account_id == null && !object_prefix) throw new Error('account_id or object_prefix is required');
     const escapedPrefix = object_prefix ? escapeLike(object_prefix) : null;
+    // The prefix search exists only to recover orphaned rows a plain account_id
+    // lookup can't reach - it must never surface a row already linked to a
+    // different account, so it is scoped to account_id IS NULL, matching the
+    // same orphan predicate the snapshot exporter and truth manifest use.
     const { rows } = await pool.query(
       `SELECT id, account_id, object_key, kind, bytes, created_at FROM uploads
-       WHERE ($1::int IS NOT NULL AND account_id=$1) OR ($2::text IS NOT NULL AND object_key LIKE $2 || '%' ESCAPE '\\') ORDER BY id`,
+       WHERE ($1::int IS NOT NULL AND account_id=$1)
+          OR ($2::text IS NOT NULL AND account_id IS NULL AND object_key LIKE $2 || '%' ESCAPE '\\')
+       ORDER BY id`,
       [account_id ?? null, escapedPrefix],
     );
     return result(rows);

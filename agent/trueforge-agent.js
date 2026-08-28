@@ -147,7 +147,13 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       ]);
       collectMinioObjects(`account ${accountId}`, accountObjects);
       const uploadRows = new Map();
-      for (const row of [...rowsOf(linkedUploads), ...rowsOf(orphanedUploads)]) uploadRows.set(row.id, row);
+      for (const row of rowsOf(linkedUploads)) uploadRows.set(row.id, row);
+      // The prefix search recovers orphaned rows (account_id IS NULL); it must
+      // never be trusted to add a row already linked to a different account,
+      // so only its NULL-account_id results are merged in here.
+      for (const row of rowsOf(orphanedUploads)) {
+        if (row.account_id == null) uploadRows.set(row.id, row);
+      }
       const uploads = [...uploadRows.values()];
       const orderRows = rowsOf(orders);
       const orderIds = orderRows.map((order) => order.id).filter(Boolean);
