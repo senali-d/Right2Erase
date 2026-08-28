@@ -83,6 +83,17 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       );
     }
 
+    // Nothing anywhere matches this subject. Opening a case here would leave a
+    // permanent audit record with zero findings and a plan that deletes
+    // nothing, which a reviewer would then be asked to approve - the same
+    // orphan-case problem the collision check above exists to prevent, and a
+    // typo is a far more common way to reach it than a collision.
+    if (accountRows.length === 0 && customerRows.length === 0) {
+      throw new Error(
+        `no ShopKart data found for ${subject_email}: no account and no billing customer match; nothing to erase`,
+      );
+    }
+
     const caseRecord = await call('case_create', { subject_email, subject_name });
     const caseId = caseRecord.case_id || caseRecord.id;
     if (!caseId) throw new Error('case_create did not return a case id');

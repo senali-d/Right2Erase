@@ -2,27 +2,90 @@
 
 A safety-first, multi-system erasure demo. ShopKart is a deterministic fake company; an agent must discover personal data across Postgres, MinIO, logs, and billing, preserve a live refund, and execute only a reviewed plan.
 
-## Quick start
+## Running the app
 
-Requirements: Docker and Node.js 20+.
+Requirements: Docker and Node.js 22.18+ (`npm test` runs a TypeScript test file
+directly, which needs Node's built-in type stripping).
 
 ```bash
-./scripts/setup.sh
-# or: npm run setup
-npm run truth
+./scripts/setup.sh   # installs deps, starts Docker services, seeds ShopKart
+npm run dev          # starts the 4 MCP servers and the control center
 ```
 
-Reset between demo takes:
+Open <http://localhost:3000>, enter `ravi.sharma@example.com`, and press
+**Open erasure case**. The agent investigates all four systems, builds a plan,
+rehearses it in a throwaway sandbox, and stops at the approval gate. Nothing is
+deleted until you click **Approve & execute**.
+
+`setup.sh` is a one-time step. After that, `npm run dev` is all you need.
+
+### What each command starts
+
+`./scripts/setup.sh` runs `npm install`, brings up `docker-compose.yml`
+(Postgres `:5432`, MinIO `:9000`/`:9001`, the fake billing API `:4010`), and
+seeds the fixture data.
+
+`npm run dev` runs `scripts/dev-all.sh`, which starts five Node processes in one
+terminal and shuts all of them down together if any one exits:
+
+| Process | Port |
+| --- | --- |
+| Billing MCP adapter | 4011 |
+| ShopKart database MCP adapter | 4012 |
+| ShopKart storage MCP adapter | 4013 |
+| Oubliette case management MCP | 4014 |
+| Control center (Next.js) | 3000 |
+
+All four MCP servers bind to `127.0.0.1`, so no `MCP_AUTH_TOKEN` is needed
+locally. The browser never calls them directly; the Next.js server does.
+
+Stop everything with Ctrl-C in that terminal. The Docker services keep running;
+stop those with `npm run down`.
+
+### Between demo takes
 
 ```bash
+# stop npm run dev first: the Oubliette MCP server holds the case DB open,
+# so clearing it while that process is alive has no effect on it
 ./scripts/demo-reset.sh
+npm run dev
 ```
+
+This re-seeds ShopKart and clears Oubliette's cases, run mirrors, and cached
+ground-truth reports, so the same subject can be investigated again from
+scratch. Cases are permanent audit records with no delete path, which is why
+reopening one without a reset is refused.
+
+### Troubleshooting
+
+- **"cannot reach the Oubliette MCP server"** in the UI: an MCP server is not
+  running. `npm run dev` starts all four; check its output for a port conflict.
+- **"a case already exists for ..."**: expected. Open the existing case, or run
+  `./scripts/demo-reset.sh` for a clean slate.
+- **Port already in use**: something from a previous run survived. Check with
+  `lsof -i :3000` (or 4011-4014) and stop it.
+### Verifying the agent independently
+
+`npm run truth` prints the expected manifest, derived straight from Postgres by
+tooling the agent cannot reach. To score a real case against it:
+
+```bash
+node agent/build-plan-manifest.js <case_id> plan.json
+npm run truth -- --diff plan.json
+```
+
+The control center shows the same comparison in its verification panel, so this
+is the terminal equivalent of that screen.
+
+Other useful scripts: `npm test` runs the full suite, `npm run web:build`
+produces a production build, and `npm run reset` re-seeds ShopKart only.
 
 ## Repository
 
-- `fixture/` — ShopKart fake services, schema, seed data, and operator-only truth checker
-- `mcp/` — agent-facing MCP adapters for the fake services
-- `docs/` — architecture, capability map, and Phase 0 evidence
+- `fixture/` - ShopKart fake services, schema, seed data, and operator-only truth checker
+- `mcp/` - agent-facing MCP adapters for the fake services
+- `web/` - the Data Erasure Control Center (Next.js)
+- `docs/` - architecture, capability map, and Phase 0 evidence
 
 ## Qodo Code Review Evidence
 
@@ -66,6 +129,36 @@ npm run mcp:storage:http  # http://127.0.0.1:4013/mcp
 The billing adapter remains separate at `http://127.0.0.1:4011/mcp` and exposes
 read-only discovery plus dry-run preview. Billing deletion is reached only
 through Oubliette's approved execution path.
+
+## Data Erasure Control Center
+
+`web/` is a Next.js UI over the same agent the CLI drives. It is one screen that
+tells one story: who the subject is, where their data lives, what will be
+deleted, what will not, whether the plan was actually tested, who authorized it,
+and what happened.
+
+The browser never talks to MCP. `mcp/http-transport.js` enforces an Origin
+allowlist and serves no CORS headers, so every MCP call goes through Next.js
+route handlers, which import `createAgent()` directly. The UI performs no
+deletion of its own: approving calls `agent.executeApproved()`, and Oubliette
+independently re-validates the canonical plan hash, the approving identity, and
+the case revision before any adapter runs.
+
+Live progress comes from `createAgent({ onToolCall })` - the agent has no events
+of its own, so the UI derives its six phases from the tool names passing
+through. The browser polls `/api/runs/<id>` once a second.
+
+Two things are not in the case store and are tracked by `web/lib/run-store.ts`,
+mirrored under `.oubliette/runs/`: the live phase, and the sandbox rehearsal
+transcript, which `prepare()` returns and then discards. The rehearsal panel
+shows both attempts - the seeded fixture deliberately fails the first on a
+foreign-key violation and succeeds on the canonical-order retry.
+
+The verification panel scores the case against `fixture/scripts/truth-core.js`,
+which derives the correct answer straight from Postgres and is never reachable
+by the agent. Its report is cached per case under `.oubliette/truth/`, because
+after a successful erasure the subject's rows are gone and ground truth can no
+longer be recomputed.
 
 ## TrueForge agent
 

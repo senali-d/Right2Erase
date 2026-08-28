@@ -12,6 +12,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { writeFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import { MCP_SERVERS } from './trueforge-agent.js';
 
 // Postgres/billing record types truth.js scores by count. Anything else
@@ -34,7 +35,7 @@ function parseResult(result) {
   try { return JSON.parse(text); } catch { return text; }
 }
 
-function buildManifest(findings) {
+export function buildManifest(findings) {
   const delete_ = {};
   const bump = (key) => { delete_[key] = (delete_[key] || 0) + 1; };
   const withhold = [];
@@ -91,4 +92,8 @@ async function main() {
   }
 }
 
-await main();
+// Guarded so buildManifest can be imported (the operator UI scores a case
+// against truth-core.js with the same bucketing) without running the CLI.
+if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+  await main();
+}

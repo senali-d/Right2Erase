@@ -4,14 +4,19 @@
   "private": true,
   "type": "module",
   "workspaces": [
-    "fixture"
+    "fixture",
+    "web"
   ],
   "scripts": {
     "setup": "npm install && npm run up && npm run seed",
+    "dev": "./scripts/dev-all.sh",
+    "web:dev": "npm --workspace oubliette-web run dev",
+    "web:build": "npm --workspace oubliette-web run build",
+    "web:start": "npm --workspace oubliette-web run start",
     "up": "docker compose up -d --wait",
     "down": "docker compose down -v",
     "seed": "npm --workspace fixture run seed",
-    "truth": "npm --workspace fixture run truth --",
+    "truth": "node fixture/scripts/truth.js",
     "reset": "npm run down && npm run up && npm run seed",
     "mcp:billing": "node mcp/billing-server.js",
     "mcp:billing:http": "MCP_TRANSPORT=http MCP_PORT=4011 node mcp/billing-server.js",
@@ -24,7 +29,7 @@
     "test": "node --test && npm --workspaces run test --if-present"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22.18"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

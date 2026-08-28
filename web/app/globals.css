@@ -1,0 +1,62 @@
+@import "tailwindcss";
+
+/*
+ * Bound class detection to this workspace. Tailwind v4 otherwise auto-detects
+ * sources by walking up from this file, which reaches the repo root and its
+ * fixture data, MCP servers, and .oubliette snapshots - none of which contain
+ * classes, and scanning them stalls the build.
+ */
+@source "../app";
+@source "../components";
+@source "../lib";
+
+/*
+ * Oubliette control-center palette. Deliberately narrow: a near-black ground,
+ * one cool accent for "the system is working", and three semantic colors that
+ * each mean exactly one thing on this screen -
+ *   amber  = withheld, this data survives
+ *   red    = destructive, this is the irreversible action
+ *   green  = verified, something independently confirmed this
+ * Nothing else is allowed to use those three.
+ */
+@theme {
+  --color-ground: #07090d;
+  --color-surface: #0d1117;
+  --color-raised: #141b24;
+  --color-line: #1e2733;
+  --color-line-bright: #2c3947;
+
+  --color-ink: #e6edf3;
+  --color-ink-dim: #8b98a5;
+  --color-ink-faint: #5a6672;
+
+  --color-accent: #4a9eff;
+  --color-accent-dim: #1d4ed8;
+
+  --color-hold: #f5a623;
+  --color-hold-dim: #3a2a0a;
+  --color-danger: #f4514f;
+  --color-danger-dim: #3d1513;
+  --color-verify: #3fb950;
+  --color-verify-dim: #0f2e15;
+
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--color-ground);
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* The tool feed and long manifests scroll a lot; keep their bars unobtrusive. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-bright) transparent;
+}

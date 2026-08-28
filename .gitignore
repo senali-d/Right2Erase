@@ -4,3 +4,6 @@ node_modules
 fixture/.DS_Store
 .DS_Store
 .oubliette
+web/.next
+web/next-env.d.ts
+web/tsconfig.tsbuildinfo
