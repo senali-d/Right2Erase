@@ -170,24 +170,32 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
           <StepRail steps={view.steps} orientation="horizontal" />
         </div>
 
-        <SystemCards systems={view.systems} investigated={view.discovery_complete} />
+        <div id="phase-discovery">
+          <SystemCards systems={view.systems} investigated={view.discovery_complete} />
+        </div>
 
-        <WithheldPanel withheld={view.withheld} />
+        <div id="phase-planning">
+          <WithheldPanel withheld={view.withheld} />
+        </div>
 
-        <SandboxPanel rehearsal={run?.rehearsal} running={running && !run?.rehearsal} />
+        <div id="phase-sandbox">
+          <SandboxPanel rehearsal={run?.rehearsal} running={running && !run?.rehearsal} />
+        </div>
 
-        {run?.status === 'failed' ? (
-          <div className="rounded border border-danger/50 bg-danger-dim/40 px-4 py-3.5">
-            <p className="font-semibold text-danger">Run failed</p>
-            <p className="mt-1.5 break-words text-ink-dim">{run.error}</p>
-          </div>
-        ) : null}
+        <div id="phase-approval" className="space-y-6">
+          {run?.status === 'failed' ? (
+            <div className="rounded border border-danger/50 bg-danger-dim/40 px-4 py-3.5">
+              <p className="font-semibold text-danger">Run failed</p>
+              <p className="mt-1.5 break-words text-ink-dim">{run.error}</p>
+            </div>
+          ) : null}
 
-        {executed ? (
-          <CertificatePanel view={view} />
-        ) : (
-          <ApprovalPanel view={view} onApprove={approve} submitting={submitting || running} error={approveError} />
-        )}
+          {executed ? (
+            <CertificatePanel view={view} />
+          ) : (
+            <ApprovalPanel view={view} onApprove={approve} submitting={submitting || running} error={approveError} />
+          )}
+        </div>
 
         {truth ? <VerificationPanel truth={truth} /> : null}
       </main>

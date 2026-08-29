@@ -1,5 +1,11 @@
-import { PHASES, PHASE_LABELS, type Phase } from '@/lib/phases';
+'use client';
+
+import { PHASES, PHASE_LABELS, PHASE_SECTION_IDS, type Phase } from '@/lib/phases';
 import type { StepState } from '@/lib/case-view';
+
+function jumpTo(phase: Phase) {
+  document.getElementById(PHASE_SECTION_IDS[phase])?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
 const MARK: Record<StepState, string> = {
   done: '●', // filled - this happened
@@ -43,33 +49,36 @@ export function StepRail({
         const state = steps[phase];
         const calls = counts?.[phase];
         return (
-          <li
-            key={phase}
-            className={
-              horizontal
-                ? 'flex items-baseline gap-1.5'
-                : `flex items-baseline gap-2.5 rounded px-2 py-1.5 ${
-                    state === 'active' ? 'bg-raised' : ''
-                  }`
-            }
-          >
-            <span className={`${COLOR[state]} ${state === 'active' ? 'animate-pulse' : ''}`}>
-              {MARK[state]}
-            </span>
-            <span
+          <li key={phase}>
+            <button
+              type="button"
+              onClick={() => jumpTo(phase)}
               className={
-                state === 'pending'
-                  ? 'text-ink-faint'
-                  : state === 'active'
-                    ? 'text-ink'
-                    : 'text-ink-dim'
+                horizontal
+                  ? 'flex items-baseline gap-1.5'
+                  : `flex w-full items-baseline gap-2.5 rounded px-2 py-1.5 text-left hover:bg-raised ${
+                      state === 'active' ? 'bg-raised' : ''
+                    }`
               }
             >
-              {PHASE_LABELS[phase]}
-            </span>
-            {calls && !horizontal ? (
-              <span className="ml-auto text-[10px] text-ink-faint">{calls}</span>
-            ) : null}
+              <span className={`${COLOR[state]} ${state === 'active' ? 'animate-pulse' : ''}`}>
+                {MARK[state]}
+              </span>
+              <span
+                className={
+                  state === 'pending'
+                    ? 'text-ink-faint'
+                    : state === 'active'
+                      ? 'text-ink'
+                      : 'text-ink-dim'
+                }
+              >
+                {PHASE_LABELS[phase]}
+              </span>
+              {calls && !horizontal ? (
+                <span className="ml-auto text-[10px] text-ink-faint">{calls}</span>
+              ) : null}
+            </button>
           </li>
         );
       })}
