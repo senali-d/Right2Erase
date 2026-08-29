@@ -13,39 +13,13 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { parseResult } from '../agent/create-agent.js';
+import { callTool, skipUnless } from './test-client.js';
 
 const DB_URL = process.env.SHOPKART_DB_MCP_URL || 'http://127.0.0.1:4012/mcp';
 
-async function connect(url) {
-  const client = new Client({ name: 'adapter-invariant-tests', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL(url)));
-  return client;
-}
-
-async function reachable(url) {
-  try {
-    const client = await connect(url);
-    await client.close();
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-const dbUp = await reachable(DB_URL);
-const skipDb = dbUp ? false : `shopkart-db MCP not reachable at ${DB_URL}; run npm run dev`;
-
-async function call(url, name, args) {
-  const client = await connect(url);
-  try {
-    return parseResult(await client.callTool({ name, arguments: args }));
-  } finally {
-    await client.close();
-  }
-}
+const AGENT = 'adapter-invariant-tests';
+const skipDb = await skipUnless(DB_URL, 'shopkart-db');
+const call = (url, name, args) => callTool(url, AGENT, name, args);
 
 test('db_find_accounts refuses an email that resolves to more than one account', { skip: skipDb }, async () => {
   // The seeded fixture has no colliding address, so create the collision the
@@ -109,14 +83,22 @@ test('db_search_event_log batches internally and dedupes IP-matched rows', { ski
     call(DB_URL, 'db_search_event_log', { emails: padded, ip_address: '203.0.113.47' }),
   ]);
 
-  assert.ok(plain.length > 0, 'the fixture seeds event-log rows for the subject');
+  assert.ok(plain.count > 0, 'the fixture seeds event-log rows for the subject');
   assert.deepEqual(
-    batched.map((row) => row.id).sort((a, b) => a - b),
-    plain.map((row) => row.id).sort((a, b) => a - b),
+    [...batched.event_ids].sort((a, b) => a - b),
+    [...plain.event_ids].sort((a, b) => a - b),
     'batching must not drop or duplicate rows',
   );
-  const ids = batched.map((row) => row.id);
-  assert.equal(new Set(ids).size, ids.length, 'IP-matched rows must not repeat once per batch');
+  assert.equal(new Set(batched.event_ids).size, batched.event_ids.length, 'IP-matched rows must not repeat once per batch');
+  assert.equal(batched.count, batched.event_ids.length);
+
+  // Ids, not rows: the full set is what the harness would offload out of the
+  // conversation, so the response must stay small no matter how many rows match.
+  assert.ok(batched.sample.length <= 3, 'sample must stay small');
+  assert.ok(
+    JSON.stringify(batched).length < 24_000,
+    `event-log response must stay well under the offload threshold, got ${JSON.stringify(batched).length} bytes`,
+  );
 });
 
 test('db_search_uploads returns linked and orphaned rows from a single call', { skip: skipDb }, async () => {

@@ -176,7 +176,7 @@ function createServer() {
   // because a short result looks exactly like a complete one. Batches run
   // sequentially: firing them concurrently would fan out an unbounded number
   // of simultaneous queries against a small shared pool.
-  tool('db_search_event_log', 'Search request logs by any known email addresses and/or IP address. Pass every address the subject is known by in one call - the server batches internally, so no client-side partitioning is required.', {
+  tool('db_search_event_log', `Search request logs by any known email addresses and/or IP address. Pass every address the subject is known by in one call - the server batches internally, so no client-side partitioning is required. Returns every matching event id plus a small sample of full rows, not the rows themselves: a subject routinely has hundreds of log entries, and returning them in full is both far more than is needed to record them and large enough to be offloaded out of the conversation. Record one finding per id in event_ids; read sample to see the shape of a row.`, {
     emails: z.array(z.string().email()).max(maxEventLogEmails).optional(), ip_address: z.string().ip().optional(),
   }, async ({ emails, ip_address }) => {
     if ((!emails || emails.length === 0) && !ip_address) throw new Error('emails or ip_address is required');
@@ -198,7 +198,17 @@ function createServer() {
       );
       for (const row of rows) byId.set(row.id, row);
     }
-    return result([...byId.values()]);
+    // Ids, not rows. 400 event-log rows are ~120KB - large enough that the
+    // harness offloads the response to a file and the agent never sees it
+    // inline, and far more than is needed to record one finding per row. The
+    // sample exists so the shape of a row is still visible without shipping
+    // every one of them.
+    const rows = [...byId.values()];
+    return result({
+      count: rows.length,
+      event_ids: rows.map((row) => row.id),
+      sample: rows.slice(0, 3),
+    });
   });
   tool('db_export_subject_snapshot', `Export one account and every row reachable from it (historical emails, orders, order items, settled refunds, support tickets, uploads, event-log rows matched by known email/IP, and retained refunds referenced by its orders) into a self-contained sandbox SQLite snapshot. The snapshot enforces the same foreign-key dependencies as production PostgreSQL, so db_rehearse_deletion_plan can prove a deletion order safe before it ever touches real ShopKart data. Every call writes a fresh, uniquely named file, even for the same account, so concurrent exports never overwrite or delete each other. Returns snapshot_id: pass that opaque token, not snapshot_path, to db_stage_deletion_actions, db_rehearse_deletion_plan, and db_delete_snapshot - those tools accept only an id this server issued, never a path. A large discovered account's delete actions do not fit one db_stage_deletion_actions call (each is capped at ${maxRehearsalChunkSize}); call it repeatedly with successive chunks, in order, before calling db_rehearse_deletion_plan. Never call this with an ambiguous or unresolved account id.`, {
     account_id: z.coerce.number().int().positive(),

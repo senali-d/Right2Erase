@@ -10,35 +10,12 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { parseResult } from '../agent/create-agent.js';
+import { callTool, skipUnless } from '../mcp/test-client.js';
 
 const URL_ = process.env.OUBLIETTE_MCP_URL || 'http://127.0.0.1:4014/mcp';
 
-async function connect() {
-  const client = new Client({ name: 'oubliette-invariant-tests', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL(URL_)));
-  return client;
-}
-
-let up = true;
-try {
-  const probe = await connect();
-  await probe.close();
-} catch {
-  up = false;
-}
-const skip = up ? false : `oubliette MCP not reachable at ${URL_}; run npm run dev`;
-
-async function call(name, args) {
-  const client = await connect();
-  try {
-    return parseResult(await client.callTool({ name, arguments: args }));
-  } finally {
-    await client.close();
-  }
-}
+const skip = await skipUnless(URL_, 'oubliette');
+const call = (name, args) => callTool(URL_, 'oubliette-invariant-tests', name, args);
 
 async function newCase() {
   const created = await call('case_create', { subject_email: `agent-test-${Date.now()}@example.com` });
@@ -146,4 +123,53 @@ test('a built plan carries the retained refund as withheld, never as an erase ac
   const retained = plan.body.actions.filter((a) => a.record_type === 'retained_refund');
   assert.equal(retained.length, 1);
   assert.equal(retained[0].disposition, 'retain', 'the plan a human signs must not claim to delete it');
+});
+
+test('finding_add_many records a whole result set from ids alone', { skip }, async () => {
+  const caseId = await newCase();
+  await call('finding_add_many', {
+    case_id: caseId,
+    record_ids: [11, 12, 13],
+    system: 'postgres',
+    record_type: 'event',
+  });
+  await call('case_complete_discovery', { case_id: caseId });
+  const plan = await call('plan_create', { case_id: caseId });
+
+  const events = plan.body.actions.filter((a) => a.record_type === 'event');
+  // record_id is a TEXT column, so ids come back as strings whichever form
+  // recorded them - the compact form is not a second storage path.
+  assert.deepEqual(events.map((a) => a.record_id).sort(), ['11', '12', '13']);
+  assert.ok(events.every((a) => a.disposition === 'erase'));
+});
+
+test('the compact form still cannot erase a retained refund', { skip }, async () => {
+  const caseId = await newCase();
+  await call('finding_add_many', {
+    case_id: caseId, record_ids: [1], system: 'postgres', record_type: 'retained_refund', disposition: 'erase',
+  });
+  await call('case_complete_discovery', { case_id: caseId });
+  const plan = await call('plan_create', { case_id: caseId });
+
+  const retained = plan.body.actions.filter((a) => a.record_type === 'retained_refund');
+  assert.equal(retained.length, 1);
+  assert.equal(retained[0].disposition, 'retain');
+});
+
+test('finding_add_many refuses a call that gives both forms, or neither', { skip }, async () => {
+  const caseId = await newCase();
+  const findings = [{ system: 'postgres', record_type: 'event', record_id: 1 }];
+  await assert.rejects(
+    call('finding_add_many', {
+      case_id: caseId, findings, record_ids: [1], system: 'postgres', record_type: 'event',
+    }),
+    /exactly one of findings or record_ids/,
+  );
+  await assert.rejects(call('finding_add_many', { case_id: caseId }), /exactly one of findings or record_ids/);
+  // Ids with no type to give them is a batch that cannot be recorded, not one
+  // to guess a record_type for.
+  await assert.rejects(
+    call('finding_add_many', { case_id: caseId, record_ids: [1] }),
+    /record_ids requires system and record_type/,
+  );
 });
