@@ -40,6 +40,22 @@ async function send(method, path, body) {
   return text ? JSON.parse(text) : null;
 }
 
+/** The provider's own declared limits for a model, from TrueForge's catalog. */
+async function catalogProperties(providerType, modelId, modelName) {
+  try {
+    const response = await fetch(`${BASE}/api/v1/catalogs/model-providers`);
+    if (!response.ok) return null;
+    const catalog = await response.json();
+    const provider = (catalog.data || []).find((entry) => entry.type === providerType);
+    const match = (provider?.models || []).find(
+      (entry) => entry.model_id === modelId || entry.name === modelName,
+    );
+    return match?.properties ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export async function bootstrap() {
   // Fail with a usable message rather than a bare ECONNREFUSED stack.
   try {
@@ -85,32 +101,47 @@ export async function bootstrap() {
 
   let providers = await listProviders();
 
-  // Register the agent's model only when it is missing. The endpoint replaces a
-  // provider wholesale, so an unconditional write would silently drop any other
-  // models already configured - and re-sending the redacted key the API returns
-  // is not something to risk against a working credential. Merging into the
-  // existing model list keeps a hand-configured TrueForge intact.
-  if (!names(providers).includes(model) && providerType === 'openai') {
-    if (!process.env.OPENAI_API_KEY) {
-      console.warn(`\nWARNING: model ${model} is not configured, and OPENAI_API_KEY is not set.`);
-      console.warn(`Configured: ${names(providers).join(', ') || '(none)'}`);
-      console.warn('Put OPENAI_API_KEY in .env and re-run with --env-file=.env,');
-      console.warn(`or add the model under Settings -> Models at ${BASE}.`);
-    } else {
-      const existing = providers.find((provider) => provider.name === 'openai');
-      const keep = (existing?.manifest.models || []).filter((entry) => entry.name !== modelName);
-      await send('PUT', '/api/v1/settings/model-providers', {
-        manifest: {
-          type: 'openai',
-          auth: { api_key: process.env.OPENAI_API_KEY },
-          models: [...keep, { name: modelName, model_id: process.env.OPENAI_MODEL_ID || modelName }],
-        },
-      });
-      providers = await listProviders();
-      console.log(`model provider: openai (${modelName}${keep.length ? `, kept ${keep.length} existing` : ''})`);
+  // A key in the environment is authoritative: it is written every time, so
+  // .env can rotate a credential and not merely create one. That matters
+  // because otherwise a stale key configured through the TrueForge UI could
+  // only ever be replaced through that same UI.
+  //
+  // The endpoint replaces a provider wholesale, so the existing model list is
+  // read back and merged rather than overwritten - rotating a key must not
+  // silently delete models someone configured by hand. When no key is present
+  // nothing is written at all: re-sending the redacted key the API hands back
+  // is not worth risking against a working credential.
+  if (providerType === 'openai' && process.env.OPENAI_API_KEY) {
+    const existing = providers.find((provider) => provider.name === 'openai');
+    const keep = (existing?.manifest.models || []).filter((entry) => entry.name !== modelName);
+
+    // Every model entry must carry `properties` - context length, output cap,
+    // reasoning efforts - or the write is rejected. Take them from the entry
+    // already configured, else from TrueForge's own catalog, so the values are
+    // the provider's rather than something guessed here.
+    const modelId = process.env.OPENAI_MODEL_ID || modelName;
+    const configured = (existing?.manifest.models || []).find((entry) => entry.name === modelName);
+    const properties = configured?.properties ?? (await catalogProperties('openai', modelId, modelName));
+    if (!properties) {
+      throw new Error(`${model} is not in TrueForge's model catalog and has no configured properties; set OPENAI_MODEL_ID to a catalog model id`);
     }
+
+    await send('PUT', '/api/v1/settings/model-providers', {
+      manifest: {
+        type: 'openai',
+        auth: { api_key: process.env.OPENAI_API_KEY },
+        models: [...keep, { name: modelName, model_id: modelId, properties }],
+      },
+    });
+    providers = await listProviders();
+    console.log(`model provider: openai key set from environment (${modelName}${
+      keep.length ? `, kept ${keep.length} other model${keep.length === 1 ? '' : 's'}` : ''})`);
   } else if (names(providers).includes(model)) {
-    console.log(`model provider: ${model} already configured`);
+    console.log(`model provider: ${model} already configured in TrueForge (no OPENAI_API_KEY in environment)`);
+  } else {
+    console.warn(`\nWARNING: model ${model} is not configured, and OPENAI_API_KEY is not set.`);
+    console.warn(`Configured: ${names(providers).join(', ') || '(none)'}`);
+    console.warn('Put OPENAI_API_KEY in .env and re-run with --env-file=.env.');
   }
 
   console.log(`\nReady. Agent "${definition.name}" is available at ${BASE}.`);

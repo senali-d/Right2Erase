@@ -12,6 +12,18 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+# Load .env for every process started here. Without this the root .env reaches
+# nothing: the MCP servers do not read it, and Next resolves .env relative to
+# web/, so settings like TRUEFORGE_BASE_URL and OUBLIETTE_ENGINE would be
+# silently ignored in the one file the README tells you to put them in.
+if [[ -f .env ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  . ./.env
+  set +a
+  echo "loaded .env"
+fi
+
 pids=()
 cleanup() {
   trap - EXIT INT TERM
