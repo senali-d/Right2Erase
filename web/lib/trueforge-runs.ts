@@ -93,10 +93,11 @@ function pendingPlanHash(
 async function consume(
   runId: string,
   stream: AsyncIterable<{ data: TrueForgeApi.TurnStreamingEvent }>,
-): Promise<void> {
+): Promise<{ failure?: string }> {
   const events = new Map<string, TrueForgeApi.TurnStreamingEvent>();
   const toolNames = new Map<string, string>();
   const startedAt = new Map<string, number>();
+  let failure: string | undefined;
 
   /**
    * Learn the name of each tool call the message announces.
@@ -170,7 +171,22 @@ async function consume(
         plan_hash: pendingPlanHash(events, pending),
       });
     }
+
+    // A turn can end in error - an exhausted model quota, a provider outage -
+    // and it says so here rather than by throwing. Without reading this the
+    // run is marked done having achieved nothing, and the UI shows a phase
+    // that never advances: a failure indistinguishable from a slow success,
+    // which is the worst way to present one.
+    if (event.type === 'turn.done') {
+      const state = (event as TrueForgeApi.TurnDoneEvent).state as
+        { status?: string; message?: string } | undefined;
+      if (state?.status && state.status !== 'done') {
+        failure = state.message || `the agent turn ended with status "${state.status}"`;
+      }
+    }
   }
+
+  return { failure };
 }
 
 export function startPrepareRun(subjectEmail: string): Run {
@@ -185,8 +201,8 @@ export function startPrepareRun(subjectEmail: string): Run {
       const stream = await tf.sessions.createTurnStream(session.id, {
         input: [{ type: 'user.message', content: `Handle a right-to-erasure request for ${subjectEmail}.` }],
       });
-      await consume(run.run_id, stream.withMetadata());
-      finishRun(run.run_id, {});
+      const { failure } = await consume(run.run_id, stream.withMetadata());
+      finishRun(run.run_id, failure ? { error: failure } : {});
     } catch (error) {
       finishRun(run.run_id, { error: errorMessage(error) });
     }
@@ -227,8 +243,8 @@ export function resolveApproval(
       }));
 
       const stream = await client().sessions.createTurnStream(paused.session_id, { input });
-      await consume(run.run_id, stream.withMetadata());
-      finishRun(run.run_id, { case_id: paused.case_id });
+      const { failure } = await consume(run.run_id, stream.withMetadata());
+      finishRun(run.run_id, failure ? { error: failure } : { case_id: paused.case_id });
     } catch (error) {
       finishRun(run.run_id, { error: errorMessage(error) });
     }
