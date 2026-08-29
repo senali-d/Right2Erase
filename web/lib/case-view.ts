@@ -75,6 +75,23 @@ function countBySystem(actions: PlanAction[]): Record<string, number> {
 }
 
 /**
+ * The source row behind a finding, whichever way the recorder shaped it.
+ *
+ * finding_add documents metadata as "the source row", so an agent reading that
+ * literally sends the row's own columns, while the deterministic script nests
+ * it as { row }. Both are fair readings and the recorder is a language model,
+ * so the panel accepts either rather than losing the retention reason to a
+ * nesting choice. Wrapped form wins when present, so a row with its own `row`
+ * column is not mistaken for the wrapper.
+ */
+function sourceRow(finding: Finding): Record<string, unknown> {
+  const metadata = finding.metadata as Record<string, unknown> | undefined;
+  if (!metadata || typeof metadata !== 'object') return {};
+  const nested = metadata.row;
+  return nested && typeof nested === 'object' ? (nested as Record<string, unknown>) : metadata;
+}
+
+/**
  * A retained refund's human-readable detail lives in the finding's metadata
  * snapshot of the source row, not in the plan action - the action carries only
  * the identity triple. Fall back gracefully: a withheld record with no metadata
@@ -82,7 +99,7 @@ function countBySystem(actions: PlanAction[]): Record<string, number> {
  * matters, and the reason is supporting detail.
  */
 function toWithheld(finding: Finding): WithheldRecord {
-  const row = (finding.metadata?.row ?? {}) as Record<string, unknown>;
+  const row = sourceRow(finding);
   return {
     system: finding.system,
     record_type: finding.record_type,
