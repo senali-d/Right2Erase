@@ -27,8 +27,8 @@ import { parseResult } from '../agent/create-agent.js';
 export async function withClient(url, name, body) {
   const transport = new StreamableHTTPClientTransport(new URL(url));
   const client = new Client({ name, version: '1.0.0' });
-  await client.connect(transport);
   try {
+    await client.connect(transport);
     return await body(client);
   } finally {
     // Order matters: terminateSession needs a live transport to send DELETE on.
