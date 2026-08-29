@@ -83,7 +83,9 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
       const response = await fetch(`/api/cases/${caseId}/approve`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ plan_hash: view.plan.plan_hash, approved_by: approvedBy }),
+        // The run id lets the server resume the paused turn the agent is
+        // holding, rather than starting a second run alongside it.
+        body: JSON.stringify({ plan_hash: view.plan.plan_hash, approved_by: approvedBy, run_id: runId }),
       });
       const payload = await response.json();
       if (!response.ok) {

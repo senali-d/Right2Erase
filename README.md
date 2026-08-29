@@ -160,7 +160,70 @@ by the agent. Its report is cached per case under `.oubliette/truth/`, because
 after a successful erasure the subject's rows are gone and ground truth can no
 longer be recomputed.
 
-## TrueForge agent
+## The agent, and the two engines
+
+The investigation can be driven two ways. Both call the same MCP servers, so
+they have identical safety properties - the guarantees live in the adapters,
+not in whichever engine is calling.
+
+- **`agentic`** (default) - an LLM on the [TrueForge](https://trueforge.dev)
+  harness decides what to search, what to record, and what to withhold.
+  TrueForge runs the loop and owns the approval pause.
+- **`deterministic`** - the original fixed script in `agent/`. Kept as the
+  oracle for "is this the model or the plumbing?", and as a one-flag fallback.
+
+Pick per request with `{"engine": "deterministic"}` on `POST /api/cases`, or
+set `OUBLIETTE_ENGINE` to change the default.
+
+### Running the agentic engine
+
+```bash
+npx @truefoundry/trueforge@latest      # the harness, on :8790
+node scripts/trueforge-bootstrap.mjs   # register the 4 MCP servers + the agent
+```
+
+Bootstrap is idempotent, so re-run it after editing
+`agent/oubliette-agent.json`. Configuring a model provider is deliberately not
+scripted - it needs an API key, which belongs in TrueForge's own settings
+rather than in this repo. Add one under **Settings → Models** at
+<http://localhost:8790>; the agent definition names the model it wants and the
+bootstrap warns if that model is not configured.
+
+`node scripts/trueforge-smoke.mjs [email]` drives one case straight through the
+harness and prints what the agent did, without the UI in the way.
+
+### Why the adapters refuse instead of truncating
+
+Handing the loop to a model changed what the MCP layer has to guarantee. When
+the caller was a fixed script, several correctness properties lived in that
+script by convention. They are now enforced where a caller cannot route around
+them:
+
+- `finding_add` records a `retained_refund` as **retained** whatever
+  disposition is passed, and `plan_create` refuses a plan that claims to delete
+  one. Preserving live financial obligations is the point of the system; it was
+  previously a convention the caller happened to follow.
+- `system` and `record_type` are **closed enums**. They decide which executor a
+  record routes to and which table it is deleted from, and the retention rule
+  matches `record_type` exactly - so free text let an agent name things its own
+  way and silently slip past all three.
+- `db_find_accounts` refuses an email matching more than one account. People
+  share names and addresses get recycled; erasing the wrong person is
+  unrecoverable.
+- `case_complete_discovery` refuses a case with no findings.
+- Storage listings and `db_get_account_emails` **fail rather than return a
+  partial set**. A short result is indistinguishable from a complete one, and
+  planning from one silently leaves data behind.
+- `db_search_event_log` batches internally, and `finding_add_many` records a
+  whole result set in one call - a real subject has hundreds of records, and
+  one call per row is how an investigation runs out of patience and stops
+  early.
+
+`src/db.test.js`, `src/mcp-server.test.js`, and `mcp/database-server.test.js`
+drive these directly, with no agent involved: they are the proof that safety
+does not depend on the model behaving well.
+
+## TrueForge agent (deterministic engine)
 
 Start the four HTTP MCP servers, then prepare an investigation plan with:
 

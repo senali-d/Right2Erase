@@ -43,6 +43,19 @@ export type RehearsalEntry = {
   attempts: RehearsalAttempt[];
 };
 
+/**
+ * Identifies the paused tool call a human is being asked to authorise.
+ *
+ * The harness pauses the turn on the destructive tool and keeps the session
+ * alive; approving is resuming that same turn, not starting a new one. Both
+ * ids are needed to address it, and they are the only things the UI needs to
+ * hold between the pause and the click.
+ */
+export type ApprovalRequest = {
+  thread_id: string;
+  tool_call_ids: string[];
+};
+
 export type Run = {
   run_id: string;
   kind: RunKind;
@@ -57,6 +70,10 @@ export type Run = {
   error?: string;
   started_at: string;
   finished_at?: string;
+  /** Set when the agent runs on the TrueForge harness rather than in-process. */
+  session_id?: string;
+  /** Present only while a turn is paused at the approval gate. */
+  approval_request?: ApprovalRequest;
 };
 
 const RECENT_LIMIT = 50;
@@ -131,6 +148,34 @@ export function attachCaseId(runId: string, caseId: string): void {
   const run = runs.get(runId);
   if (!run || run.case_id === caseId) return;
   run.case_id = caseId;
+  flush(run);
+}
+
+export function setSessionId(runId: string, sessionId: string): void {
+  const run = runs.get(runId);
+  if (!run || run.session_id === sessionId) return;
+  run.session_id = sessionId;
+  flush(run);
+}
+
+export function setApprovalRequest(runId: string, request: ApprovalRequest): void {
+  const run = runs.get(runId);
+  if (!run) return;
+  run.approval_request = request;
+  flush(run);
+}
+
+/**
+ * Store a rehearsal transcript as it happens.
+ *
+ * On the harness this is the only place the transcript exists - it is a tool
+ * result on the event stream, not the return value of a function the web layer
+ * called - so it is captured here rather than reconstructed at the end.
+ */
+export function recordRehearsal(runId: string, entry: RehearsalEntry): void {
+  const run = runs.get(runId);
+  if (!run) return;
+  run.rehearsal = [...(run.rehearsal ?? []), entry];
   flush(run);
 }
 

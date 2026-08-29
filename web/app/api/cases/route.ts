@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { caseList } from '@/lib/mcp';
-import { startPrepareRun } from '@/lib/agent-runs';
+import { engineFrom, startPrepareRun } from '@/lib/engine';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -17,7 +17,7 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  let body: { subject_email?: unknown; force?: unknown };
+  let body: { subject_email?: unknown; force?: unknown; engine?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -48,6 +48,7 @@ export async function POST(request: Request) {
     }
   }
 
-  const run = startPrepareRun(subjectEmail);
-  return NextResponse.json({ run_id: run.run_id }, { status: 202 });
+  const engine = engineFrom(typeof body.engine === 'string' ? body.engine : null);
+  const run = startPrepareRun(subjectEmail, engine);
+  return NextResponse.json({ run_id: run.run_id, engine }, { status: 202 });
 }

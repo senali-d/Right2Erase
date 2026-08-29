@@ -177,20 +177,73 @@ function mutableCase(caseId) {
   return subject;
 }
 
+/**
+ * Record types that survive erasure no matter who asks.
+ *
+ * A retained refund is a live financial obligation, deliberately detached from
+ * the customer hierarchy so it outlives the account and orders it relates to.
+ * Preserving it is the single claim this whole system exists to make.
+ *
+ * Until now that claim rested on the caller passing `disposition: 'retain'` -
+ * a convention, safe only because the caller was a hardcoded script. Once an
+ * agent chooses dispositions, a convention is not a guarantee, so the store
+ * enforces it: whatever disposition arrives for one of these record types, the
+ * finding is recorded as retained.
+ */
+export const ALWAYS_RETAIN_RECORD_TYPES = new Set(['retained_refund']);
+
+export function retentionFor(recordType, requested) {
+  return ALWAYS_RETAIN_RECORD_TYPES.has(recordType) ? 'retain' : (requested ?? 'erase');
+}
+
+function insertFindings(caseId, findings, timestamp) {
+  const statement = db.prepare(`INSERT INTO findings (case_id, system, record_type, record_id, locator, metadata, disposition, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)`);
+  for (const finding of findings) {
+    statement.run(caseId, finding.system, finding.record_type, String(finding.record_id), finding.locator ?? null,
+      JSON.stringify(finding.metadata ?? {}), retentionFor(finding.record_type, finding.disposition), timestamp);
+  }
+  // A finding change creates a new case revision, invalidates prior plans, and
+  // undoes any prior discovery-complete mark since it is no longer accurate
+  // for the case's current findings. One bump per call, not per finding: the
+  // revision marks "the findings changed", and a batch is one such change.
+  db.prepare("UPDATE cases SET revision = revision + 1, status = 'discovered', discovery_completed_at = NULL, updated_at = ? WHERE id = ?").run(timestamp, caseId);
+}
+
 export function addFinding(caseId, finding) {
   const timestamp = now();
-  const transaction = db.transaction(() => {
+  db.transaction(() => {
     mutableCase(caseId);
-    db.prepare(`INSERT INTO findings (case_id, system, record_type, record_id, locator, metadata, disposition, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).run(caseId, finding.system, finding.record_type, String(finding.record_id), finding.locator ?? null,
-        JSON.stringify(finding.metadata ?? {}), finding.disposition ?? 'erase', timestamp);
-    // A finding change creates a new case revision, invalidates prior plans,
-    // and undoes any prior discovery-complete mark since it is no longer
-    // accurate for the case's current findings.
-    db.prepare("UPDATE cases SET revision = revision + 1, status = 'discovered', discovery_completed_at = NULL, updated_at = ? WHERE id = ?").run(timestamp, caseId);
-  });
-  transaction();
+    insertFindings(caseId, [finding], timestamp);
+  })();
   return getCase(caseId).findings.at(-1);
+}
+
+/**
+ * Record a whole result set in one call.
+ *
+ * Recording a real subject means several hundred findings - 400 event-log rows
+ * alone for the seeded subject. One tool call per row is unremarkable for a
+ * script and untenable for an agent, which will abandon the investigation
+ * partway and summarise what it has instead. That failure is silent: a case
+ * with a fraction of the findings still plans, still rehearses cleanly, and
+ * still reads like a complete erasure.
+ *
+ * So the batch is the affordance that makes exhaustive discovery achievable,
+ * not a convenience. Inserting in one transaction also means a batch either
+ * lands whole or not at all, rather than leaving a case half-populated.
+ */
+export function addFindings(caseId, findings) {
+  if (!Array.isArray(findings) || findings.length === 0) {
+    throw new Error('findings must be a non-empty array');
+  }
+  const timestamp = now();
+  db.transaction(() => {
+    mutableCase(caseId);
+    insertFindings(caseId, findings, timestamp);
+  })();
+  const subject = getCase(caseId);
+  return { case_id: caseId, added: findings.length, finding_count: subject.findings.length, revision: subject.revision };
 }
 
 // Discovery is a multi-step, fallible process (each MCP call can throw, e.g.
@@ -202,6 +255,16 @@ export function completeDiscovery(caseId) {
   const timestamp = now();
   const transaction = db.transaction(() => {
     mutableCase(caseId);
+    // A case with no findings describes nobody. Reached by a typo'd address, or
+    // by an investigation that concluded before it searched anything, and in
+    // both cases completing discovery would produce a plan that deletes
+    // nothing and an approval prompt for a no-op. Refusing here is
+    // system-agnostic on purpose: whether the subject is absent from Postgres,
+    // from billing, or from everywhere is not one adapter's judgment to make.
+    const { count } = db.prepare('SELECT count(*) AS count FROM findings WHERE case_id = ?').get(caseId);
+    if (count === 0) {
+      throw new Error(`case ${caseId} has no findings; refusing to complete discovery for a subject with no discovered data`);
+    }
     db.prepare('UPDATE cases SET discovery_completed_at = ?, updated_at = ? WHERE id = ?').run(timestamp, timestamp, caseId);
   });
   transaction();

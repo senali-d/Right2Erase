@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { caseGet } from '@/lib/mcp';
-import { startExecuteRun } from '@/lib/agent-runs';
+import { approveRun, pausedRunFor } from '@/lib/engine';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,7 +19,7 @@ export const dynamic = 'force-dynamic';
 export async function POST(request: Request, { params }: { params: Promise<{ caseId: string }> }) {
   const { caseId } = await params;
 
-  let body: { plan_hash?: unknown; approved_by?: unknown };
+  let body: { plan_hash?: unknown; approved_by?: unknown; run_id?: unknown };
   try {
     body = await request.json();
   } catch {
@@ -28,6 +28,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ cas
 
   const planHash = typeof body.plan_hash === 'string' ? body.plan_hash : '';
   const approvedBy = typeof body.approved_by === 'string' ? body.approved_by.trim() : '';
+  const runId = typeof body.run_id === 'string' ? body.run_id : null;
   if (!/^[0-9a-f]{64}$/.test(planHash)) {
     return NextResponse.json({ error: 'plan_hash must be a 64-character sha256 hex digest' }, { status: 400 });
   }
@@ -59,6 +60,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ cas
     );
   }
 
-  const run = startExecuteRun({ case_id: caseId, plan_hash: planHash, approved_by: approvedBy });
+  // On the harness the agent is paused mid-turn holding the plan it built, and
+  // approving resumes that turn; the deterministic engine has already returned,
+  // so approving starts execution. The caller passes the run it is looking at
+  // and approveRun picks the right route.
+  const run = approveRun(pausedRunFor(runId), {
+    case_id: caseId, plan_hash: planHash, approved_by: approvedBy,
+  });
   return NextResponse.json({ run_id: run.run_id }, { status: 202 });
 }

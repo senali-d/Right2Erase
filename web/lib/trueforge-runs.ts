@@ -1,0 +1,189 @@
+import { TrueForge, type TrueForgeApi, isEventDelta, mergeEventDelta } from '@truefoundry/trueforge-sdk';
+import {
+  attachCaseId, createRun, finishRun, recordRehearsal, recordToolCall,
+  setApprovalRequest, setSessionId, type RehearsalAttempt, type Run,
+} from './run-store';
+
+/**
+ * Drives the erasure agent on the TrueForge harness.
+ *
+ * The agent loop - model calls, tool routing, approvals, session state - lives
+ * in TrueForge. This module only translates its event stream into the run
+ * records the control center already renders, so every panel keeps working
+ * against a reasoning agent exactly as it did against the fixed script.
+ *
+ * The approval gate is the harness's own: the agent is configured to require
+ * approval for oubliette_execute_erasure, so the turn pauses on
+ * `tool.approval_required` and stays paused until a human sends back a
+ * `user.tool_approval`. Nothing in this file can execute an erasure by itself,
+ * and Oubliette still re-validates the plan hash, the approver, and the case
+ * revision before any adapter runs.
+ */
+
+const AGENT_NAME = process.env.TRUEFORGE_AGENT || 'oubliette-erasure';
+
+function client() {
+  return new TrueForge({
+    baseUrl: process.env.TRUEFORGE_BASE_URL || 'http://localhost:8790',
+    // One turn covers the whole investigation and can run for many minutes.
+    timeoutInSeconds: 1800,
+  });
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Tool results arrive as MCP content blocks; the payload is JSON in a text block. */
+function parseContent(content: unknown): unknown {
+  if (typeof content === 'string') {
+    try { return JSON.parse(content); } catch { return content; }
+  }
+  if (Array.isArray(content)) {
+    for (const block of content) {
+      const text = (block as { text?: string })?.text;
+      if (typeof text !== 'string') continue;
+      try { return JSON.parse(text); } catch { /* try the next block */ }
+    }
+  }
+  return content;
+}
+
+type ToolResponseEvent = { toolCallId?: string; isError?: boolean; content?: unknown };
+
+/**
+ * Consume one turn's event stream into a run record.
+ *
+ * Tool calls are announced on `model.message`, but only after their deltas are
+ * merged - a bare event carries no `toolCalls` - which is why events are
+ * accumulated by id here rather than read directly. Progress is counted from
+ * `tool.response`: a response means the tool actually ran, which is what the
+ * phase rail describes.
+ */
+async function consume(
+  runId: string,
+  stream: AsyncIterable<{ data: TrueForgeApi.TurnStreamingEvent }>,
+): Promise<{ pausedForApproval: boolean }> {
+  const events = new Map<string, TrueForgeApi.TurnStreamingEvent>();
+  const toolNames = new Map<string, string>();
+  const startedAt = new Map<string, number>();
+  let pausedForApproval = false;
+
+  for await (const { data: event } of stream) {
+    if (isEventDelta(event)) {
+      const base = events.get(event.id);
+      if (base) mergeEventDelta(base, event);
+      continue;
+    }
+    events.set(event.id, event);
+
+    if (event.type === 'model.message') {
+      const message = event as TrueForgeApi.ModelMessageEvent;
+      for (const call of message.toolCalls ?? []) {
+        const name = call.toolInfo?.name;
+        if (!name) continue;
+        toolNames.set(call.id, name);
+        startedAt.set(call.id, Date.now());
+      }
+    }
+
+    if (event.type === 'tool.response') {
+      const response = event as unknown as ToolResponseEvent;
+      const callId = response.toolCallId ?? '';
+      const tool = toolNames.get(callId) ?? 'tool';
+      const began = startedAt.get(callId);
+      recordToolCall(runId, { tool, ok: response.isError !== true, ms: began ? Date.now() - began : 0 });
+
+      if (response.isError === true) continue;
+
+      // The case id is knowable only from case_create's result, and the UI
+      // deep-links on it as soon as it exists.
+      if (tool === 'case_create') {
+        const created = parseContent(response.content) as { id?: string } | null;
+        if (created?.id) attachCaseId(runId, created.id);
+      }
+
+      // The rehearsal transcript exists only here, as a tool result on the
+      // stream - there is no function return to read it from.
+      if (tool === 'db_rehearse_deletion_plan') {
+        const outcome = parseContent(response.content) as { attempts?: RehearsalAttempt[] } | null;
+        if (outcome?.attempts) {
+          // account_id is not on the tool result; the snapshot the rehearsal
+          // ran against is identified by the call that produced it.
+          recordRehearsal(runId, { account_id: 0, snapshot_id: callId, attempts: outcome.attempts });
+        }
+      }
+    }
+
+    if (event.type === 'tool.approval_required') {
+      const pending = event as TrueForgeApi.ToolApprovalRequiredEvent;
+      pausedForApproval = true;
+      setApprovalRequest(runId, {
+        thread_id: pending.threadId,
+        tool_call_ids: pending.toolCalls.map((ref) => ref.id),
+      });
+    }
+  }
+
+  return { pausedForApproval };
+}
+
+export function startPrepareRun(subjectEmail: string): Run {
+  const run = createRun({ kind: 'prepare', subject_email: subjectEmail });
+
+  void (async () => {
+    try {
+      const tf = client();
+      const { data: session } = await tf.sessions.create({ agent: { name: AGENT_NAME } });
+      setSessionId(run.run_id, session.id);
+
+      const stream = await tf.sessions.createTurnStream(session.id, {
+        input: [{ type: 'user.message', content: `Handle a right-to-erasure request for ${subjectEmail}.` }],
+      });
+      await consume(run.run_id, stream.withMetadata());
+      finishRun(run.run_id, {});
+    } catch (error) {
+      finishRun(run.run_id, { error: errorMessage(error) });
+    }
+  })();
+
+  return run;
+}
+
+/**
+ * Resume the turn the harness paused at the approval gate.
+ *
+ * Approving is resuming: the pending call is allowed and the agent continues
+ * from exactly where it stopped, inside the same session, with the plan it
+ * already built. Denying resolves the same call the other way and the agent
+ * carries on without executing.
+ */
+export function resolveApproval(paused: Run, decision: { allow: boolean; approvedBy: string; reason?: string }): Run {
+  const run = createRun({ kind: 'execute', case_id: paused.case_id });
+
+  void (async () => {
+    try {
+      if (!paused.session_id || !paused.approval_request) {
+        throw new Error('that run is not paused at an approval gate');
+      }
+      setSessionId(run.run_id, paused.session_id);
+
+      const input: TrueForgeApi.UserToolApprovalEvent[] = paused.approval_request.tool_call_ids.map((toolCallId) => ({
+        type: 'user.tool_approval',
+        threadId: paused.approval_request!.thread_id,
+        toolCallId,
+        approval: decision.allow
+          ? { status: 'allow' }
+          : { status: 'deny', reason: decision.reason || `denied by ${decision.approvedBy}` },
+      }));
+
+      const stream = await client().sessions.createTurnStream(paused.session_id, { input });
+      await consume(run.run_id, stream.withMetadata());
+      finishRun(run.run_id, { case_id: paused.case_id });
+    } catch (error) {
+      finishRun(run.run_id, { error: errorMessage(error) });
+    }
+  })();
+
+  return run;
+}

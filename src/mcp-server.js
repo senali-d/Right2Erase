@@ -11,7 +11,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { startHttpMcp } from '../mcp/http-transport.js';
-import { addFinding, close, completeDiscovery, createCase, getCase, listCases, recordApproval, savePlan } from './db.js';
+import { ALWAYS_RETAIN_RECORD_TYPES, addFinding, addFindings, close, completeDiscovery, createCase, getCase, listCases, recordApproval, savePlan } from './db.js';
 import { executeBillingCleanup } from './billing-executor.js';
 import { oublietteExecuteErasure } from './execution.js';
 import { createSandboxMinioClient, executeSandboxMinioDeletion } from './minio-executor.js';
@@ -20,10 +20,38 @@ import { buildPlan, hashPlan } from './plan.js';
 
 const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] });
 const caseId = z.string().min(1).max(200);
+/**
+ * The finding vocabulary is a closed set, not free text.
+ *
+ * These strings are load-bearing downstream: `system` decides which executor a
+ * record is routed to, `record_type` decides which table it is deleted from,
+ * and the retention rule that protects retained refunds matches on
+ * `record_type` exactly. When the field was free text, a caller naming things
+ * its own way (`shopkart-db` for the server it queried, plural table names for
+ * record types) produced a case that looked complete, planned cleanly, and
+ * would have failed or misrouted at execution - with the retention rule
+ * silently not matching, which is the one failure that must never be silent.
+ *
+ * Constraining the schema turns "use these names" from an instruction a caller
+ * can drift from into a contract it cannot express anything else in.
+ */
+const SYSTEMS = ['postgres', 'minio', 'billing'];
+const RECORD_TYPES = [
+  // postgres
+  'account', 'account_email', 'order', 'order_item', 'refund', 'retained_refund', 'support_ticket', 'upload', 'event',
+  // minio
+  'object',
+  // billing
+  'customer',
+];
+
 const finding = {
-  system: z.string().min(1).max(100), record_type: z.string().min(1).max(100),
-  record_id: z.union([z.string(), z.number()]), locator: z.string().max(1000).optional(),
-  metadata: z.record(z.any()).optional(), disposition: z.enum(['erase', 'retain', 'review']).optional(),
+  system: z.enum(SYSTEMS).describe('Which source system holds the record: postgres, minio, or billing. Name the system, not the tool or server you found it through.'),
+  record_type: z.enum(RECORD_TYPES).describe('What kind of record this is, singular: account, account_email, order, order_item, refund, retained_refund, support_ticket, upload, event (postgres); object (minio); customer (billing).'),
+  record_id: z.union([z.string(), z.number()]).describe('The record primary key, or the object key for a minio object.'),
+  locator: z.string().max(1000).optional().describe('For minio objects, the full object key.'),
+  metadata: z.record(z.any()).optional().describe('The source row, kept for the audit trail.'),
+  disposition: z.enum(['erase', 'retain', 'review']).optional().describe('erase by default. retained_refund records are always recorded as retain regardless of what is passed.'),
 };
 
 async function eraseBillingCustomer({ customerId, caseId, planHash }) {
@@ -120,6 +148,15 @@ export function createServer({ interfaces = defaultExecutionInterfaces } = {}) {
     inputSchema: { case_id: caseId, ...finding }, annotations: write,
   }, async ({ case_id, ...value }) => text(addFinding(case_id, value)));
 
+  server.registerTool('finding_add_many', {
+    description: 'Record many discovered records in one call. Prefer this over repeated finding_add: a real subject has hundreds of records, and recording a whole query result in one call is how an investigation stays exhaustive. All findings are inserted in a single transaction, so the batch either lands whole or not at all. Terminal cases cannot be mutated.',
+    inputSchema: {
+      case_id: caseId,
+      findings: z.array(z.object(finding)).min(1).max(2000),
+    },
+    annotations: write,
+  }, async ({ case_id, findings }) => text(addFindings(case_id, findings)));
+
   server.registerTool('case_complete_discovery', {
     description: 'Mark discovery complete for a case. Call this only after every discovery finding for the case has been recorded; plan_create refuses to build a plan until this has been called for the case\'s current findings, so an investigation that aborts partway (for example on a truncated storage query) can never be planned or executed from its partial findings.',
     inputSchema: { case_id: caseId }, annotations: write,
@@ -135,6 +172,17 @@ export function createServer({ interfaces = defaultExecutionInterfaces } = {}) {
       throw new Error(`case ${case_id} has not completed discovery; refusing to plan from a possibly-partial investigation`);
     }
     const body = buildPlan({ case_id, findings: value.findings });
+    // addFinding already coerces these to 'retain', so this can only fire if a
+    // finding reached the store by some other path. It is here because a plan
+    // is an audit record a human signs: it must never claim a retained refund
+    // will be deleted, even in a case where the executor would refuse anyway.
+    const wrongful = body.actions.filter(
+      (action) => ALWAYS_RETAIN_RECORD_TYPES.has(action.record_type) && action.disposition === 'erase',
+    );
+    if (wrongful.length) {
+      throw new Error(`refusing to plan deletion of retained record(s): ${
+        wrongful.map((a) => `${a.record_type}:${a.record_id}`).join(', ')}`);
+    }
     const planHash = hashPlan(body);
     return text({ ...savePlan(case_id, body, planHash, value.revision), body, plan_hash: planHash });
   });
