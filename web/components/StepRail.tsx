@@ -1,5 +1,11 @@
-import { PHASES, PHASE_LABELS, type Phase } from '@/lib/phases';
+'use client';
+
+import { PHASES, PHASE_LABELS, PHASE_SECTION_IDS, type Phase } from '@/lib/phases';
 import type { StepState } from '@/lib/case-view';
+
+function jumpTo(phase: Phase) {
+  document.getElementById(PHASE_SECTION_IDS[phase])?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
 
 const MARK: Record<StepState, string> = {
   done: '●', // filled - this happened
@@ -19,6 +25,7 @@ export function StepRail({
   steps,
   counts,
   orientation = 'vertical',
+  navigable = true,
 }: {
   steps: Record<Phase, StepState>;
   counts?: Partial<Record<Phase, number>>;
@@ -28,6 +35,12 @@ export function StepRail({
    * dropping it.
    */
   orientation?: 'vertical' | 'horizontal';
+  /**
+   * The case page has a section for every phase to scroll to; the run page
+   * (no case id yet, or a run that failed before getting one) does not, so a
+   * click there would jump nowhere. Render plain rows instead of dead buttons.
+   */
+  navigable?: boolean;
 }) {
   const horizontal = orientation === 'horizontal';
 
@@ -42,34 +55,38 @@ export function StepRail({
       {PHASES.map((phase) => {
         const state = steps[phase];
         const calls = counts?.[phase];
+        const Row = navigable ? 'button' : 'div';
         return (
-          <li
-            key={phase}
-            className={
-              horizontal
-                ? 'flex items-baseline gap-1.5'
-                : `flex items-baseline gap-2.5 rounded px-2 py-1.5 ${
-                    state === 'active' ? 'bg-raised' : ''
-                  }`
-            }
-          >
-            <span className={`${COLOR[state]} ${state === 'active' ? 'animate-pulse' : ''}`}>
-              {MARK[state]}
-            </span>
-            <span
+          <li key={phase}>
+            <Row
+              type={navigable ? 'button' : undefined}
+              onClick={navigable ? () => jumpTo(phase) : undefined}
               className={
-                state === 'pending'
-                  ? 'text-ink-faint'
-                  : state === 'active'
-                    ? 'text-ink'
-                    : 'text-ink-dim'
+                horizontal
+                  ? 'flex items-baseline gap-1.5'
+                  : `flex w-full items-baseline gap-2.5 rounded px-2 py-1.5 text-left ${
+                      navigable ? 'hover:bg-raised' : ''
+                    } ${state === 'active' ? 'bg-raised' : ''}`
               }
             >
-              {PHASE_LABELS[phase]}
-            </span>
-            {calls && !horizontal ? (
-              <span className="ml-auto text-[10px] text-ink-faint">{calls}</span>
-            ) : null}
+              <span className={`${COLOR[state]} ${state === 'active' ? 'animate-pulse' : ''}`}>
+                {MARK[state]}
+              </span>
+              <span
+                className={
+                  state === 'pending'
+                    ? 'text-ink-faint'
+                    : state === 'active'
+                      ? 'text-ink'
+                      : 'text-ink-dim'
+                }
+              >
+                {PHASE_LABELS[phase]}
+              </span>
+              {calls && !horizontal ? (
+                <span className="ml-auto text-[10px] text-ink-faint">{calls}</span>
+              ) : null}
+            </Row>
           </li>
         );
       })}

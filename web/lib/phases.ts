@@ -27,6 +27,20 @@ export const PHASE_LABELS: Record<Phase, string> = {
   certificate: 'Certificate',
 };
 
+/**
+ * DOM anchor each rail step scrolls to. Approval, execution, and certificate
+ * share one id because they are the same panel on the page - it renders as
+ * the approval gate, then swaps to the certificate once executed.
+ */
+export const PHASE_SECTION_IDS: Record<Phase, string> = {
+  discovery: 'phase-discovery',
+  planning: 'phase-planning',
+  sandbox: 'phase-sandbox',
+  approval: 'phase-approval',
+  execution: 'phase-approval',
+  certificate: 'phase-approval',
+};
+
 const SANDBOX_TOOLS = new Set([
   'db_export_subject_snapshot',
   'db_stage_deletion_actions',
