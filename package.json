@@ -27,7 +27,7 @@
     "mcp:oubliette": "node src/mcp-server.js",
     "mcp:oubliette:http": "MCP_TRANSPORT=http node src/mcp-server.js",
     "mcp:all": "node scripts/mcp-all.js",
-    "test": "node --test && npm --workspaces run test --if-present"
+    "test": "node --env-file-if-exists=.env --test && npm --workspaces run test --if-present"
   },
   "engines": {
     "node": ">=22.18"

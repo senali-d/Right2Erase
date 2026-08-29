@@ -23,9 +23,27 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { parseResult } from '../agent/create-agent.js';
 
+/**
+ * The bearer token the adapters expect, if one is configured.
+ *
+ * Without this, setting MCP_AUTH_TOKEN reproduces exactly the failure this
+ * file was written to stop. Every probe gets a 401, a 401 is indistinguishable
+ * from an absent server, and skipUnless skips the suite: 91 passing becomes 72
+ * passing, 0 failing, with 19 adapter invariants quietly unchecked. The token
+ * makes the run notice the adapters are there.
+ *
+ * Same precedence as the other clients in this repo - a per-server
+ * MCP_AUTH_TOKEN_<NAME> if one is issued, otherwise the shared token. See
+ * agent/create-agent.js and web/lib/mcp.ts.
+ */
+function authHeaders(name) {
+  const token = process.env[`MCP_AUTH_TOKEN_${String(name).toUpperCase()}`] || process.env.MCP_AUTH_TOKEN;
+  return token ? { headers: { authorization: `Bearer ${token}` } } : undefined;
+}
+
 /** Open a client, run `body` with it, and always give the session back. */
 export async function withClient(url, name, body) {
-  const transport = new StreamableHTTPClientTransport(new URL(url));
+  const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: authHeaders(name) });
   const client = new Client({ name, version: '1.0.0' });
   try {
     await client.connect(transport);
