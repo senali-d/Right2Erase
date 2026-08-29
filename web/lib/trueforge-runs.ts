@@ -1,7 +1,20 @@
-import { TrueForge, type TrueForgeApi, isEventDelta, mergeEventDelta } from '@truefoundry/trueforge-sdk';
 import {
-  attachCaseId, createRun, finishRun, recordRehearsal, recordToolCall,
-  setApprovalRequest, setSessionId, type ApprovalRequest, type RehearsalAttempt, type Run,
+  TrueForge,
+  type TrueForgeApi,
+  isEventDelta,
+  mergeEventDelta,
+} from '@truefoundry/trueforge-sdk';
+import {
+  attachCaseId,
+  createRun,
+  finishRun,
+  recordRehearsal,
+  recordToolCall,
+  setApprovalRequest,
+  setSessionId,
+  type ApprovalRequest,
+  type RehearsalAttempt,
+  type Run,
 } from './run-store.ts';
 
 /**
@@ -37,19 +50,31 @@ function errorMessage(error: unknown): string {
 /** Tool results arrive as MCP content blocks; the payload is JSON in a text block. */
 function parseContent(content: unknown): unknown {
   if (typeof content === 'string') {
-    try { return JSON.parse(content); } catch { return content; }
+    try {
+      return JSON.parse(content);
+    } catch {
+      return content;
+    }
   }
   if (Array.isArray(content)) {
     for (const block of content) {
       const text = (block as { text?: string })?.text;
       if (typeof text !== 'string') continue;
-      try { return JSON.parse(text); } catch { /* try the next block */ }
+      try {
+        return JSON.parse(text);
+      } catch {
+        /* try the next block */
+      }
     }
   }
   return content;
 }
 
-type ToolResponseEvent = { toolCallId?: string; isError?: boolean; content?: unknown };
+type ToolResponseEvent = {
+  toolCallId?: string;
+  isError?: boolean;
+  content?: unknown;
+};
 
 /**
  * The plan hash the paused execution call is about to act on.
@@ -68,7 +93,9 @@ function pendingPlanHash(
   for (const ref of pending.toolCalls) {
     const source = events.get(ref.sourceEventId);
     if (source?.type !== 'model.message') continue;
-    const call = (source as TrueForgeApi.ModelMessageEvent).toolCalls?.find((entry) => entry.id === ref.id);
+    const call = (source as TrueForgeApi.ModelMessageEvent).toolCalls?.find(
+      (entry) => entry.id === ref.id,
+    );
     // Matched through toolNameOf, not toolInfo.name: a dispatched call reports
     // the wrapper, so comparing the raw name would never recognise the one
     // tool this gate exists for, and every approval would arrive with no hash
@@ -114,10 +141,14 @@ function toolNameOf(call: TrueForgeApi.ToolCall): string | undefined {
 }
 
 /** The raw arguments object, or undefined while it is still streaming. */
-function parseArguments(call: TrueForgeApi.ToolCall): Record<string, unknown> | undefined {
+function parseArguments(
+  call: TrueForgeApi.ToolCall,
+): Record<string, unknown> | undefined {
   try {
     const parsed = JSON.parse(call.function?.arguments || '{}');
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, unknown>)
+      : undefined;
   } catch {
     return undefined;
   }
@@ -135,7 +166,9 @@ function callArguments(call: TrueForgeApi.ToolCall): Record<string, unknown> {
   if (!args) return {};
   if (call.toolInfo?.name !== DISPATCH_TOOL) return args;
   const input = args.input;
-  return input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+  return input && typeof input === 'object'
+    ? (input as Record<string, unknown>)
+    : {};
 }
 
 /**
@@ -191,37 +224,50 @@ async function consume(
       const base = events.get(event.id);
       if (!base) continue;
       mergeEventDelta(base, event);
-      if (base.type === 'model.message') harvestToolCalls(base as TrueForgeApi.ModelMessageEvent);
+      if (base.type === 'model.message')
+        harvestToolCalls(base as TrueForgeApi.ModelMessageEvent);
       continue;
     }
     events.set(event.id, event);
 
-    if (event.type === 'model.message') harvestToolCalls(event as TrueForgeApi.ModelMessageEvent);
+    if (event.type === 'model.message')
+      harvestToolCalls(event as TrueForgeApi.ModelMessageEvent);
 
     if (event.type === 'tool.response') {
       const response = event as unknown as ToolResponseEvent;
       const callId = response.toolCallId ?? '';
       const tool = toolNames.get(callId) ?? 'tool';
       const began = startedAt.get(callId);
-      recordToolCall(runId, { tool, ok: response.isError !== true, ms: began ? Date.now() - began : 0 });
+      recordToolCall(runId, {
+        tool,
+        ok: response.isError !== true,
+        ms: began ? Date.now() - began : 0,
+      });
 
       if (response.isError === true) continue;
 
       // The case id is knowable only from case_create's result, and the UI
       // deep-links on it as soon as it exists.
       if (tool === 'case_create') {
-        const created = parseContent(response.content) as { id?: string } | null;
+        const created = parseContent(response.content) as {
+          id?: string;
+        } | null;
         if (created?.id) attachCaseId(runId, created.id);
       }
 
       // The rehearsal transcript exists only here, as a tool result on the
       // stream - there is no function return to read it from.
       if (tool === 'db_rehearse_deletion_plan') {
-        const outcome = parseContent(response.content) as { attempts?: RehearsalAttempt[] } | null;
+        const outcome = parseContent(response.content) as {
+          attempts?: RehearsalAttempt[];
+        } | null;
         if (outcome?.attempts) {
           // The tool result does not name the account, so the entry is
           // identified by the call that produced it.
-          recordRehearsal(runId, { snapshot_id: callId, attempts: outcome.attempts });
+          recordRehearsal(runId, {
+            snapshot_id: callId,
+            attempts: outcome.attempts,
+          });
         }
       }
     }
@@ -247,7 +293,8 @@ async function consume(
       const state = (event as TrueForgeApi.TurnDoneEvent).state as
         { status?: string; message?: string } | undefined;
       if (state?.status && state.status !== 'done') {
-        failure = state.message || `the agent turn ended with status "${state.status}"`;
+        failure =
+          state.message || `the agent turn ended with status "${state.status}"`;
       }
     }
   }
@@ -261,11 +308,18 @@ export function startPrepareRun(subjectEmail: string): Run {
   void (async () => {
     try {
       const tf = client();
-      const { data: session } = await tf.sessions.create({ agent: { name: AGENT_NAME } });
+      const { data: session } = await tf.sessions.create({
+        agent: { name: AGENT_NAME },
+      });
       setSessionId(run.run_id, session.id);
 
       const stream = await tf.sessions.createTurnStream(session.id, {
-        input: [{ type: 'user.message', content: `Handle a right-to-erasure request for ${subjectEmail}.` }],
+        input: [
+          {
+            type: 'user.message',
+            content: `Handle a right-to-erasure request for ${subjectEmail}.`,
+          },
+        ],
       });
       const { failure } = await consume(run.run_id, stream.withMetadata());
       finishRun(run.run_id, failure ? { error: failure } : {});
@@ -294,23 +348,34 @@ export function resolveApproval(
 
   void (async () => {
     try {
-      if (!paused.session_id) throw new Error('that run is not paused at an approval gate');
+      if (!paused.session_id)
+        throw new Error('that run is not paused at an approval gate');
       setSessionId(run.run_id, paused.session_id);
 
       // The request is passed in rather than read off the run: it has already
       // been claimed, so the run no longer carries it.
-      const input: TrueForgeApi.UserToolApprovalEvent[] = request.tool_call_ids.map((toolCallId) => ({
-        type: 'user.tool_approval',
-        threadId: request.thread_id,
-        toolCallId,
-        approval: decision.allow
-          ? { status: 'allow' }
-          : { status: 'deny', reason: decision.reason || `denied by ${decision.approvedBy}` },
-      }));
+      const input: TrueForgeApi.UserToolApprovalEvent[] =
+        request.tool_call_ids.map((toolCallId) => ({
+          type: 'user.tool_approval',
+          threadId: request.thread_id,
+          toolCallId,
+          approval: decision.allow
+            ? { status: 'allow' }
+            : {
+                status: 'deny',
+                reason: decision.reason || `denied by ${decision.approvedBy}`,
+              },
+        }));
 
-      const stream = await client().sessions.createTurnStream(paused.session_id, { input });
+      const stream = await client().sessions.createTurnStream(
+        paused.session_id,
+        { input },
+      );
       const { failure } = await consume(run.run_id, stream.withMetadata());
-      finishRun(run.run_id, failure ? { error: failure } : { case_id: paused.case_id });
+      finishRun(
+        run.run_id,
+        failure ? { error: failure } : { case_id: paused.case_id },
+      );
     } catch (error) {
       finishRun(run.run_id, { error: errorMessage(error) });
     }

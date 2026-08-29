@@ -28,7 +28,9 @@ export function ApprovalPanel({
   if (!plan) {
     return (
       <Panel title="Approval">
-        <p className="text-ink-dim">No plan yet. The gate opens once discovery and rehearsal finish.</p>
+        <p className="text-ink-dim">
+          No plan yet. The gate opens once discovery and rehearsal finish.
+        </p>
       </Panel>
     );
   }
@@ -56,24 +58,36 @@ export function ApprovalPanel({
 
       <dl className="mt-3 space-y-1.5">
         {Object.entries(plan.by_system).map(([system, count]) => (
-          <div key={system} className="flex items-baseline justify-between border-b border-line pb-1.5">
+          <div
+            key={system}
+            className="flex items-baseline justify-between border-b border-line pb-1.5"
+          >
             <dt className="text-ink">{SYSTEM_LABEL[system] ?? system}</dt>
             <dd className="tabular-nums text-ink">{count.toLocaleString()}</dd>
           </div>
         ))}
         <div className="flex items-baseline justify-between pt-1">
           <dt className="text-hold">Withheld</dt>
-          <dd className="tabular-nums text-hold">{plan.withheld_count.toLocaleString()}</dd>
+          <dd className="tabular-nums text-hold">
+            {plan.withheld_count.toLocaleString()}
+          </dd>
         </div>
       </dl>
 
       <div className="mt-5 space-y-1 border-t border-line pt-4">
-        <div className="text-[10px] uppercase tracking-[0.14em] text-ink-faint">Plan hash</div>
-        <code className="block break-all text-[11px] leading-relaxed text-ink-dim">{plan.plan_hash}</code>
+        <div className="text-[10px] uppercase tracking-[0.14em] text-ink-faint">
+          Plan hash
+        </div>
+        <code className="block break-all text-[11px] leading-relaxed text-ink-dim">
+          {plan.plan_hash}
+        </code>
       </div>
 
       <div className="mt-4">
-        <label className="text-[10px] uppercase tracking-[0.14em] text-ink-faint" htmlFor="approved-by">
+        <label
+          className="text-[10px] uppercase tracking-[0.14em] text-ink-faint"
+          htmlFor="approved-by"
+        >
           Approving as
         </label>
         <input
@@ -84,7 +98,8 @@ export function ApprovalPanel({
           className="mt-1 w-full rounded border border-line-bright bg-ground px-3 py-2 text-ink outline-none focus:border-accent disabled:opacity-50"
         />
         <p className="mt-1 text-[10px] text-ink-faint">
-          Recorded on the approval and re-checked by Right2Erase before execution.
+          Recorded on the approval and re-checked by Right2Erase before
+          execution.
         </p>
       </div>
 

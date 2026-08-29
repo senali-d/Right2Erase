@@ -7,7 +7,13 @@ import type { ToolEvent } from '@/lib/run-store';
  * own vocabulary. Newest first so the moving edge stays in view without
  * scroll-anchoring.
  */
-export function ToolFeed({ events, total }: { events: ToolEvent[]; total: number }) {
+export function ToolFeed({
+  events,
+  total,
+}: {
+  events: ToolEvent[];
+  total: number;
+}) {
   if (!events.length) return null;
 
   return (
@@ -16,7 +22,9 @@ export function ToolFeed({ events, total }: { events: ToolEvent[]; total: number
         <h2 className="text-[10px] font-semibold uppercase tracking-[0.14em] text-ink-dim">
           Tool calls
         </h2>
-        <span className="text-[10px] tabular-nums text-ink-faint">{total.toLocaleString()}</span>
+        <span className="text-[10px] tabular-nums text-ink-faint">
+          {total.toLocaleString()}
+        </span>
       </header>
       <ul className="max-h-72 overflow-y-auto px-3 py-2">
         {[...events].reverse().map((event, index) => (
@@ -24,9 +32,13 @@ export function ToolFeed({ events, total }: { events: ToolEvent[]; total: number
             key={`${event.at}-${index}`}
             className="flex items-baseline gap-2 py-0.5 text-[11px]"
           >
-            <span className={event.ok ? 'text-verify' : 'text-danger'}>{event.ok ? '·' : '✗'}</span>
+            <span className={event.ok ? 'text-verify' : 'text-danger'}>
+              {event.ok ? '·' : '✗'}
+            </span>
             <span className="truncate text-ink-dim">{event.tool}</span>
-            <span className="ml-auto shrink-0 tabular-nums text-ink-faint">{event.ms}ms</span>
+            <span className="ml-auto shrink-0 tabular-nums text-ink-faint">
+              {event.ms}ms
+            </span>
           </li>
         ))}
       </ul>

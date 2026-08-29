@@ -31,18 +31,48 @@ const BASE = process.env.TRUEFORGE_BASE_URL || 'http://localhost:8790';
  * present.
  */
 function authFor(name) {
-  const token = process.env[`MCP_AUTH_TOKEN_${name.toUpperCase()}`] || process.env.MCP_AUTH_TOKEN;
-  return token ? { auth: { type: 'header', headers: { authorization: `Bearer ${token}` } } } : {};
+  const token =
+    process.env[`MCP_AUTH_TOKEN_${name.toUpperCase()}`] ||
+    process.env.MCP_AUTH_TOKEN;
+  return token
+    ? {
+        auth: { type: 'header', headers: { authorization: `Bearer ${token}` } },
+      }
+    : {};
 }
 
 // The four adapters this project serves, named as the agent definition
 // references them. URLs mirror the ports in .env.example. The env var each
 // token is read from is the adapter's own name, not its TrueForge label.
 const MCP_SERVERS = [
-  { name: 'shopkart-db', url: process.env.SHOPKART_DB_MCP_URL || 'http://127.0.0.1:4012/mcp', description: 'Read-only ShopKart Postgres discovery, sandbox snapshot export, and deletion rehearsal.', ...authFor('database') },
-  { name: 'shopkart-storage', url: process.env.SHOPKART_STORAGE_MCP_URL || 'http://127.0.0.1:4013/mcp', description: 'Read-only ShopKart MinIO object metadata. Never returns object content.', ...authFor('storage') },
-  { name: 'shopkart-billing', url: process.env.SHOPKART_BILLING_MCP_URL || 'http://127.0.0.1:4011/mcp', description: 'Read-only billing customer and charge lookup, plus dry-run erasure preview.', ...authFor('billing') },
-  { name: 'right-to-erase', url: process.env.OUBLIETTE_MCP_URL || 'http://127.0.0.1:4014/mcp', description: 'Oubliette case management: findings, immutable plans, approvals, and the sole destructive erasure tool.', ...authFor('oubliette') },
+  {
+    name: 'shopkart-db',
+    url: process.env.SHOPKART_DB_MCP_URL || 'http://127.0.0.1:4012/mcp',
+    description:
+      'Read-only ShopKart Postgres discovery, sandbox snapshot export, and deletion rehearsal.',
+    ...authFor('database'),
+  },
+  {
+    name: 'shopkart-storage',
+    url: process.env.SHOPKART_STORAGE_MCP_URL || 'http://127.0.0.1:4013/mcp',
+    description:
+      'Read-only ShopKart MinIO object metadata. Never returns object content.',
+    ...authFor('storage'),
+  },
+  {
+    name: 'shopkart-billing',
+    url: process.env.SHOPKART_BILLING_MCP_URL || 'http://127.0.0.1:4011/mcp',
+    description:
+      'Read-only billing customer and charge lookup, plus dry-run erasure preview.',
+    ...authFor('billing'),
+  },
+  {
+    name: 'right-to-erase',
+    url: process.env.OUBLIETTE_MCP_URL || 'http://127.0.0.1:4014/mcp',
+    description:
+      'Oubliette case management: findings, immutable plans, approvals, and the sole destructive erasure tool.',
+    ...authFor('oubliette'),
+  },
 ];
 
 async function send(method, path, body) {
@@ -53,7 +83,9 @@ async function send(method, path, body) {
   });
   const text = await response.text();
   if (!response.ok) {
-    throw new Error(`${method} ${path} -> ${response.status}: ${text.slice(0, 400)}`);
+    throw new Error(
+      `${method} ${path} -> ${response.status}: ${text.slice(0, 400)}`,
+    );
   }
   return text ? JSON.parse(text) : null;
 }
@@ -72,7 +104,8 @@ async function send(method, path, body) {
  * free to return a different model whose label happened to match first.
  */
 async function resolveModel(providerType, { name, modelId, configured }) {
-  const pick = (entry) => (entry ? { modelId: entry.model_id, properties: entry.properties } : null);
+  const pick = (entry) =>
+    entry ? { modelId: entry.model_id, properties: entry.properties } : null;
 
   // The catalog is consulted first, even when an entry is already configured.
   // It is the provider's own statement of what a model is called upstream, so
@@ -85,7 +118,9 @@ async function resolveModel(providerType, { name, modelId, configured }) {
     const response = await fetch(`${BASE}/api/v1/catalogs/model-providers`);
     if (response.ok) {
       const catalog = await response.json();
-      catalogModels = (catalog.data || []).find((entry) => entry.type === providerType)?.models || [];
+      catalogModels =
+        (catalog.data || []).find((entry) => entry.type === providerType)
+          ?.models || [];
     }
   } catch {
     // Falls through to the configured entry, or to no match at all.
@@ -99,9 +134,13 @@ async function resolveModel(providerType, { name, modelId, configured }) {
   // Nothing in the catalog. An explicitly requested id can still be honoured if
   // the provider already has an entry for exactly that id.
   if (modelId) {
-    return configured?.model_id === modelId && configured?.properties ? pick(configured) : null;
+    return configured?.model_id === modelId && configured?.properties
+      ? pick(configured)
+      : null;
   }
-  return pick(configured?.model_id && configured?.properties ? configured : null);
+  return pick(
+    configured?.model_id && configured?.properties ? configured : null,
+  );
 }
 
 export async function bootstrap() {
@@ -109,7 +148,9 @@ export async function bootstrap() {
   try {
     await fetch(`${BASE}/api/v1/settings/mcp-servers`);
   } catch {
-    throw new Error(`TrueForge is not reachable at ${BASE}. Start it with: npx @truefoundry/trueforge@latest`);
+    throw new Error(
+      `TrueForge is not reachable at ${BASE}. Start it with: npx @truefoundry/trueforge@latest`,
+    );
   }
 
   for (const server of MCP_SERVERS) {
@@ -120,16 +161,24 @@ export async function bootstrap() {
   }
 
   const definition = JSON.parse(
-    await readFile(new URL('../agent/oubliette-agent.json', import.meta.url), 'utf8'),
+    await readFile(
+      new URL('../agent/oubliette-agent.json', import.meta.url),
+      'utf8',
+    ),
   );
 
   const model = definition.manifest.model.name;
   const [providerType, modelName] = model.split('/');
 
-  const listProviders = async () => (await (await fetch(`${BASE}/api/v1/settings/model-providers`)).json()).data || [];
-  const names = (providers) => providers.flatMap(
-    (provider) => (provider.manifest.models || []).map((entry) => `${provider.name}/${entry.name}`),
-  );
+  const listProviders = async () =>
+    (await (await fetch(`${BASE}/api/v1/settings/model-providers`)).json())
+      .data || [];
+  const names = (providers) =>
+    providers.flatMap((provider) =>
+      (provider.manifest.models || []).map(
+        (entry) => `${provider.name}/${entry.name}`,
+      ),
+    );
 
   let providers = await listProviders();
 
@@ -145,7 +194,9 @@ export async function bootstrap() {
   // is not worth risking against a working credential.
   if (providerType === 'openai' && process.env.OPENAI_API_KEY) {
     const existing = providers.find((provider) => provider.name === 'openai');
-    const keep = (existing?.manifest.models || []).filter((entry) => entry.name !== modelName);
+    const keep = (existing?.manifest.models || []).filter(
+      (entry) => entry.name !== modelName,
+    );
 
     // Every model entry must carry `properties` - context length, output cap,
     // reasoning efforts - or the write is rejected. The upstream id and those
@@ -156,13 +207,17 @@ export async function bootstrap() {
     const resolved = await resolveModel('openai', {
       name: modelName,
       modelId: process.env.OPENAI_MODEL_ID,
-      configured: (existing?.manifest.models || []).find((entry) => entry.name === modelName),
+      configured: (existing?.manifest.models || []).find(
+        (entry) => entry.name === modelName,
+      ),
     });
     if (!resolved) {
       throw new Error(
-        `cannot resolve ${model}: ${process.env.OPENAI_MODEL_ID
-          ? `OPENAI_MODEL_ID="${process.env.OPENAI_MODEL_ID}" is not in TrueForge's model catalog`
-          : `no catalog entry named "${modelName}" and none configured`}`,
+        `cannot resolve ${model}: ${
+          process.env.OPENAI_MODEL_ID
+            ? `OPENAI_MODEL_ID="${process.env.OPENAI_MODEL_ID}" is not in TrueForge's model catalog`
+            : `no catalog entry named "${modelName}" and none configured`
+        }`,
       );
     }
 
@@ -173,9 +228,9 @@ export async function bootstrap() {
     const clash = keep.find((entry) => entry.model_id === resolved.modelId);
     if (clash) {
       throw new Error(
-        `model id "${resolved.modelId}" is already configured as "${clash.name}". `
-        + `Point the agent at openai/${clash.name} in agent/oubliette-agent.json `
-        + 'rather than aliasing the same model under a second name.',
+        `model id "${resolved.modelId}" is already configured as "${clash.name}". ` +
+          `Point the agent at openai/${clash.name} in agent/oubliette-agent.json ` +
+          'rather than aliasing the same model under a second name.',
       );
     }
 
@@ -183,16 +238,32 @@ export async function bootstrap() {
       manifest: {
         type: 'openai',
         auth: { api_key: process.env.OPENAI_API_KEY },
-        models: [...keep, { name: modelName, model_id: resolved.modelId, properties: resolved.properties }],
+        models: [
+          ...keep,
+          {
+            name: modelName,
+            model_id: resolved.modelId,
+            properties: resolved.properties,
+          },
+        ],
       },
     });
     providers = await listProviders();
-    console.log(`model provider: openai key set from environment (${modelName} -> ${resolved.modelId}${
-      keep.length ? `, kept ${keep.length} other model${keep.length === 1 ? '' : 's'}` : ''})`);
+    console.log(
+      `model provider: openai key set from environment (${modelName} -> ${resolved.modelId}${
+        keep.length
+          ? `, kept ${keep.length} other model${keep.length === 1 ? '' : 's'}`
+          : ''
+      })`,
+    );
   } else if (names(providers).includes(model)) {
-    console.log(`model provider: ${model} already configured in TrueForge (no OPENAI_API_KEY in environment)`);
+    console.log(
+      `model provider: ${model} already configured in TrueForge (no OPENAI_API_KEY in environment)`,
+    );
   } else {
-    console.warn(`\nWARNING: model ${model} is not configured, and OPENAI_API_KEY is not set.`);
+    console.warn(
+      `\nWARNING: model ${model} is not configured, and OPENAI_API_KEY is not set.`,
+    );
     console.warn(`Configured: ${names(providers).join(', ') || '(none)'}`);
     console.warn('Put OPENAI_API_KEY in .env and re-run with --env-file=.env.');
   }
@@ -214,17 +285,25 @@ export async function bootstrap() {
   } catch (error) {
     if (!/-> 409:/.test(error.message)) throw error;
     const listed = await (await fetch(`${BASE}/api/v1/agents`)).json();
-    const existing = (listed.data || []).find((agent) => agent.name === definition.name);
-    if (!existing) throw new Error(`${definition.name} reported as taken but is not listed`);
+    const existing = (listed.data || []).find(
+      (agent) => agent.name === definition.name,
+    );
+    if (!existing)
+      throw new Error(`${definition.name} reported as taken but is not listed`);
     const agentId = existing.agent_id || existing.id;
-    await send('PUT', `/api/v1/agents/${agentId}`, { manifest: definition.manifest });
+    await send('PUT', `/api/v1/agents/${agentId}`, {
+      manifest: definition.manifest,
+    });
     console.log(`agent: updated ${definition.name} (${agentId})`);
   }
 
   console.log(`\nReady. Agent "${definition.name}" is available at ${BASE}.`);
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
   bootstrap().catch((error) => {
     console.error(error.message);
     process.exitCode = 1;

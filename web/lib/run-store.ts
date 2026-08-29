@@ -24,7 +24,11 @@ export type RunStatus = 'running' | 'done' | 'failed';
 
 export type ToolEvent = { tool: string; ok: boolean; ms: number; at: string };
 
-export type PhaseState = { started_at?: string; completed_at?: string; tool_calls: number };
+export type PhaseState = {
+  started_at?: string;
+  completed_at?: string;
+  tool_calls: number;
+};
 
 export type RehearsalAttempt = {
   order: 'as_planned' | 'canonical_leaf_to_root';
@@ -99,29 +103,43 @@ const RECENT_LIMIT = 50;
 
 // next dev re-evaluates modules on hot reload; a module-level Map would be
 // replaced mid-run and orphan the run the browser is polling for.
-const runs: Map<string, Run> = ((globalThis as Record<string, unknown>).__oublietteRuns ??= new Map()) as Map<string, Run>;
+const runs: Map<string, Run> = ((
+  globalThis as Record<string, unknown>
+).__oublietteRuns ??= new Map()) as Map<string, Run>;
 
 function runsDir(): string {
   // The web app's cwd is web/, one level below the repo root where the MCP
   // servers put .oubliette.
-  return process.env.OUBLIETTE_RUNS_DIR || path.resolve(process.cwd(), '..', '.oubliette', 'runs');
+  return (
+    process.env.OUBLIETTE_RUNS_DIR ||
+    path.resolve(process.cwd(), '..', '.oubliette', 'runs')
+  );
 }
 
 function flush(run: Run): void {
   try {
     const dir = runsDir();
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, `${run.run_id}.json`), JSON.stringify(run, null, 2));
+    fs.writeFileSync(
+      path.join(dir, `${run.run_id}.json`),
+      JSON.stringify(run, null, 2),
+    );
   } catch {
     // The mirror is a convenience. Losing it must never fail an erasure run.
   }
 }
 
 function emptyPhases(): Record<Phase, PhaseState> {
-  return Object.fromEntries(PHASES.map((p) => [p, { tool_calls: 0 }])) as Record<Phase, PhaseState>;
+  return Object.fromEntries(
+    PHASES.map((p) => [p, { tool_calls: 0 }]),
+  ) as Record<Phase, PhaseState>;
 }
 
-export function createRun(init: { kind: RunKind; subject_email?: string; case_id?: string }): Run {
+export function createRun(init: {
+  kind: RunKind;
+  subject_email?: string;
+  case_id?: string;
+}): Run {
   const now = new Date().toISOString();
   const run: Run = {
     run_id: randomUUID(),
@@ -177,7 +195,10 @@ export function setSessionId(runId: string, sessionId: string): void {
   flush(run);
 }
 
-export function setApprovalRequest(runId: string, request: ApprovalRequest): void {
+export function setApprovalRequest(
+  runId: string,
+  request: ApprovalRequest,
+): void {
   const run = runs.get(runId);
   if (!run) return;
   run.approval_request = request;
@@ -207,7 +228,10 @@ export function claimApprovalRequest(runId: string): ApprovalRequest | null {
 }
 
 /** Put a claim back when the work it was claimed for could not be started. */
-export function restoreApprovalRequest(runId: string, request: ApprovalRequest): void {
+export function restoreApprovalRequest(
+  runId: string,
+  request: ApprovalRequest,
+): void {
   const run = runs.get(runId);
   if (!run || run.approval_request) return;
   run.approval_request = request;
@@ -228,7 +252,10 @@ export function recordRehearsal(runId: string, entry: RehearsalEntry): void {
   flush(run);
 }
 
-export function recordToolCall(runId: string, event: { tool: string; ok: boolean; ms: number }): void {
+export function recordToolCall(
+  runId: string,
+  event: { tool: string; ok: boolean; ms: number },
+): void {
   const run = runs.get(runId);
   if (!run) return;
 
@@ -248,7 +275,8 @@ export function recordToolCall(runId: string, event: { tool: string; ok: boolean
   run.phases[run.phase].tool_calls += 1;
   run.tool_calls += 1;
   run.recent.push({ tool: event.tool, ok: event.ok, ms: event.ms, at });
-  if (run.recent.length > RECENT_LIMIT) run.recent.splice(0, run.recent.length - RECENT_LIMIT);
+  if (run.recent.length > RECENT_LIMIT)
+    run.recent.splice(0, run.recent.length - RECENT_LIMIT);
 }
 
 export function finishRun(

@@ -14,6 +14,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { MCP_SERVERS } from './trueforge-agent.js';
+import { parseResult } from './create-agent.js';
 
 // Postgres/billing record types truth.js scores by count. Anything else
 // (account_email, minio objects) is a real deletion target the agent still
@@ -27,13 +28,6 @@ const DELETE_KEY_BY_RECORD_TYPE = {
   event: 'event_log',
   customer: 'billing_customers',
 };
-
-function parseResult(result) {
-  const text = result?.content?.find((item) => item.type === 'text')?.text;
-  if (result?.isError) throw new Error(text || 'MCP tool call failed');
-  if (!text) return result;
-  try { return JSON.parse(text); } catch { return text; }
-}
 
 /**
  * The source row behind a finding, whichever way the recorder shaped it.
@@ -59,7 +53,9 @@ function sourceRow(finding) {
 
 export function buildManifest(findings) {
   const delete_ = {};
-  const bump = (key) => { delete_[key] = (delete_[key] || 0) + 1; };
+  const bump = (key) => {
+    delete_[key] = (delete_[key] || 0) + 1;
+  };
   const withhold = [];
 
   for (const finding of findings) {
@@ -97,17 +93,31 @@ async function main() {
   const caseId = process.argv[2];
   const outPath = process.argv[3] || 'plan.json';
   if (!caseId) {
-    console.error('Usage: node agent/build-plan-manifest.js <case_id> [outfile]');
+    console.error(
+      'Usage: node agent/build-plan-manifest.js <case_id> [outfile]',
+    );
     process.exitCode = 2;
     return;
   }
 
-  const client = new Client({ name: 'plan-manifest-builder', version: '1.0.0' });
-  await client.connect(new StreamableHTTPClientTransport(new URL(MCP_SERVERS.oubliette)));
+  const client = new Client({
+    name: 'plan-manifest-builder',
+    version: '1.0.0',
+  });
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(MCP_SERVERS.oubliette)),
+  );
   try {
-    const caseRecord = parseResult(await client.callTool({ name: 'case_get', arguments: { case_id: caseId } }));
+    const caseRecord = parseResult(
+      await client.callTool({
+        name: 'case_get',
+        arguments: { case_id: caseId },
+      }),
+    );
     if (!caseRecord || !Array.isArray(caseRecord.findings)) {
-      throw new Error(`case_get returned a malformed response for ${caseId}: ${JSON.stringify(caseRecord)}`);
+      throw new Error(
+        `case_get returned a malformed response for ${caseId}: ${JSON.stringify(caseRecord)}`,
+      );
     }
     const manifest = buildManifest(caseRecord.findings);
     await writeFile(outPath, JSON.stringify(manifest, null, 2));
@@ -120,6 +130,9 @@ async function main() {
 
 // Guarded so buildManifest can be imported (the operator UI scores a case
 // against truth-core.js with the same bucketing) without running the CLI.
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
   await main();
 }

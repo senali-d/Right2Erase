@@ -1,5 +1,11 @@
 import { createAgent } from '../../agent/create-agent.js';
-import { attachCaseId, createRun, finishRun, recordToolCall, type Run } from './run-store.ts';
+import {
+  attachCaseId,
+  createRun,
+  finishRun,
+  recordToolCall,
+  type Run,
+} from './run-store.ts';
 
 /**
  * Runs the TrueForge agent on behalf of the UI.
@@ -23,7 +29,11 @@ type AgentHandle = {
     case_id: string;
     rehearsal?: unknown[];
   }>;
-  executeApproved(request: { case_id: string; plan_hash: string; approved_by: string }): Promise<unknown>;
+  executeApproved(request: {
+    case_id: string;
+    plan_hash: string;
+    approved_by: string;
+  }): Promise<unknown>;
   close(): Promise<void>;
 };
 
@@ -42,7 +52,10 @@ function errorMessage(error: unknown): string {
 function stripSnapshotPaths(rehearsal: unknown): Run['rehearsal'] {
   if (!Array.isArray(rehearsal)) return undefined;
   return rehearsal.map((entry) => {
-    const { snapshot_path: _dropped, ...rest } = entry as Record<string, unknown>;
+    const { snapshot_path: _dropped, ...rest } = entry as Record<
+      string,
+      unknown
+    >;
     return rest;
   }) as Run['rehearsal'];
 }
@@ -80,7 +93,11 @@ export function startPrepareRun(subjectEmail: string): Run {
   return run;
 }
 
-export function startExecuteRun(args: { case_id: string; plan_hash: string; approved_by: string }): Run {
+export function startExecuteRun(args: {
+  case_id: string;
+  plan_hash: string;
+  approved_by: string;
+}): Run {
   const run = createRun({ kind: 'execute', case_id: args.case_id });
 
   void (async () => {

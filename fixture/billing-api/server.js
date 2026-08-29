@@ -31,18 +31,25 @@ function publicView(c) {
     id: c.id,
     email: c.email,
     name: c.name,
-    payment_profile: c.card ? { brand: c.card.brand, last4: c.card.last4 } : null,
+    payment_profile: c.card
+      ? { brand: c.card.brand, last4: c.card.last4 }
+      : null,
     charge_count: c.charges.length,
     erased: !!c.erased_at,
   };
 }
 
-app.get('/health', (_req, res) => res.json({ ok: true, customers: customers.size }));
+app.get('/health', (_req, res) =>
+  res.json({ ok: true, customers: customers.size }),
+);
 
 app.get('/customers', (req, res) => {
   const email = String(req.query.email || '').toLowerCase();
-  if (!email) return res.status(400).json({ error: 'email query parameter is required' });
-  const found = [...customers.values()].filter((c) => c.email.toLowerCase() === email);
+  if (!email)
+    return res.status(400).json({ error: 'email query parameter is required' });
+  const found = [...customers.values()].filter(
+    (c) => c.email.toLowerCase() === email,
+  );
   res.json({ query: email, results: found.map(publicView) });
 });
 
@@ -88,7 +95,8 @@ app.post('/customers/:id/erase', (req, res) => {
 
   if (dryRun) return res.json({ dry_run: true, ...effect });
 
-  if (c.erased_at) return res.status(409).json({ error: 'already erased', at: c.erased_at });
+  if (c.erased_at)
+    return res.status(409).json({ error: 'already erased', at: c.erased_at });
 
   const removed = { charges: c.charges.length, card: c.card ? 1 : 0 };
   c.card = null;

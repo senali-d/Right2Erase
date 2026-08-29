@@ -1,10 +1,17 @@
 'use client';
 
-import { PHASES, PHASE_LABELS, PHASE_SECTION_IDS, type Phase } from '@/lib/phases';
+import {
+  PHASES,
+  PHASE_LABELS,
+  PHASE_SECTION_IDS,
+  type Phase,
+} from '@/lib/phases';
 import type { StepState } from '@/lib/case-view';
 
 function jumpTo(phase: Phase) {
-  document.getElementById(PHASE_SECTION_IDS[phase])?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  document
+    .getElementById(PHASE_SECTION_IDS[phase])
+    ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 const MARK: Record<StepState, string> = {
@@ -69,7 +76,9 @@ export function StepRail({
                     } ${state === 'active' ? 'bg-raised' : ''}`
               }
             >
-              <span className={`${COLOR[state]} ${state === 'active' ? 'animate-pulse' : ''}`}>
+              <span
+                className={`${COLOR[state]} ${state === 'active' ? 'animate-pulse' : ''}`}
+              >
                 {MARK[state]}
               </span>
               <span
@@ -84,7 +93,9 @@ export function StepRail({
                 {PHASE_LABELS[phase]}
               </span>
               {calls && !horizontal ? (
-                <span className="ml-auto text-[10px] text-ink-faint">{calls}</span>
+                <span className="ml-auto text-[10px] text-ink-faint">
+                  {calls}
+                </span>
               ) : null}
             </Row>
           </li>

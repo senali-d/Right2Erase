@@ -17,7 +17,10 @@ import { PHASES, phaseIndex, type Phase } from '@/lib/phases';
  * it is where an identity collision surfaces, since that check deliberately
  * runs before any case exists to fail against.
  */
-function railFromRun(current: Phase, running: boolean): Record<Phase, StepState> {
+function railFromRun(
+  current: Phase,
+  running: boolean,
+): Record<Phase, StepState> {
   const currentIndex = phaseIndex(current);
   return Object.fromEntries(
     PHASES.map((phase) => {
@@ -29,7 +32,11 @@ function railFromRun(current: Phase, running: boolean): Record<Phase, StepState>
   ) as Record<Phase, StepState>;
 }
 
-export default function RunPage({ params }: { params: Promise<{ runId: string }> }) {
+export default function RunPage({
+  params,
+}: {
+  params: Promise<{ runId: string }>;
+}) {
   const { runId } = use(params);
   const router = useRouter();
   const { run, error } = useRun(runId);
@@ -43,9 +50,13 @@ export default function RunPage({ params }: { params: Promise<{ runId: string }>
       <Link href="/" className="text-[11px] text-ink-faint hover:text-ink-dim">
         ← all cases
       </Link>
-      <h1 className="mt-4 text-lg font-semibold tracking-[0.2em] text-ink">RIGHT2ERASE</h1>
+      <h1 className="mt-4 text-lg font-semibold tracking-[0.2em] text-ink">
+        RIGHT2ERASE
+      </h1>
       <p className="mt-1.5 text-ink-dim">
-        {run?.subject_email ? `Investigating ${run.subject_email}…` : 'Starting investigation…'}
+        {run?.subject_email
+          ? `Investigating ${run.subject_email}…`
+          : 'Starting investigation…'}
       </p>
 
       {run?.status === 'failed' ? (
@@ -53,8 +64,8 @@ export default function RunPage({ params }: { params: Promise<{ runId: string }>
           <p className="font-semibold text-danger">Investigation stopped</p>
           <p className="mt-1.5 text-ink-dim">{run.error}</p>
           <p className="mt-2 text-[11px] leading-relaxed text-ink-faint">
-            Identity is resolved before a case is created, so a collision stops here rather than
-            leaving an empty case behind.
+            Identity is resolved before a case is created, so a collision stops
+            here rather than leaving an empty case behind.
           </p>
         </div>
       ) : null}
@@ -66,7 +77,10 @@ export default function RunPage({ params }: { params: Promise<{ runId: string }>
           <StepRail
             steps={railFromRun(run.phase, run.status === 'running')}
             counts={Object.fromEntries(
-              Object.entries(run.phases).map(([phase, state]) => [phase, state.tool_calls]),
+              Object.entries(run.phases).map(([phase, state]) => [
+                phase,
+                state.tool_calls,
+              ]),
             )}
             navigable={false}
           />

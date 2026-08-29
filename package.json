@@ -27,7 +27,9 @@
     "mcp:oubliette": "node src/mcp-server.js",
     "mcp:oubliette:http": "MCP_TRANSPORT=http node src/mcp-server.js",
     "mcp:all": "node scripts/mcp-all.js",
-    "test": "node --env-file-if-exists=.env --test && npm --workspaces run test --if-present"
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "engines": {
     "node": ">=22.18"
@@ -39,5 +41,12 @@
     "minio": "^8.0.7",
     "pg": "^8.12.0",
     "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.11.0",
+    "prettier": "^3.9.6"
   }
 }

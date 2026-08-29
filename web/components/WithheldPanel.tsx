@@ -18,7 +18,8 @@ export function WithheldPanel({ withheld }: { withheld: WithheldRecord[] }) {
     return (
       <Panel title="Withheld">
         <p className="text-ink-dim">
-          Nothing is being withheld - every discovered record is scheduled for deletion.
+          Nothing is being withheld - every discovered record is scheduled for
+          deletion.
         </p>
       </Panel>
     );
@@ -47,10 +48,14 @@ export function WithheldPanel({ withheld }: { withheld: WithheldRecord[] }) {
                 {record.record_type.replace(/_/g, ' ')} #{record.record_id}
               </span>
               {record.order_number ? (
-                <span className="text-ink-dim">order {record.order_number}</span>
+                <span className="text-ink-dim">
+                  order {record.order_number}
+                </span>
               ) : null}
               {money(record.amount_cents) ? (
-                <span className="tabular-nums text-ink">{money(record.amount_cents)}</span>
+                <span className="tabular-nums text-ink">
+                  {money(record.amount_cents)}
+                </span>
               ) : null}
               <span className="ml-auto text-[10px] uppercase tracking-[0.12em] text-ink-faint">
                 {record.system} · {record.disposition}
@@ -66,9 +71,9 @@ export function WithheldPanel({ withheld }: { withheld: WithheldRecord[] }) {
         ))}
       </ul>
       <p className="mt-3 text-[11px] leading-relaxed text-ink-faint">
-        Withheld records are excluded from the manifest before any adapter runs, and the executor
-        rejects them again at the boundary. They survive deletion of the account and orders they
-        relate to.
+        Withheld records are excluded from the manifest before any adapter runs,
+        and the executor rejects them again at the boundary. They survive
+        deletion of the account and orders they relate to.
       </p>
     </Panel>
   );

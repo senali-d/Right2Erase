@@ -40,13 +40,17 @@ import { parseResult } from '../agent/create-agent.js';
  * MCP_AUTH_TOKEN_<NAME> variables.
  */
 function authHeaders(key) {
-  const token = process.env[`MCP_AUTH_TOKEN_${String(key).toUpperCase()}`] || process.env.MCP_AUTH_TOKEN;
+  const token =
+    process.env[`MCP_AUTH_TOKEN_${String(key).toUpperCase()}`] ||
+    process.env.MCP_AUTH_TOKEN;
   return token ? { headers: { authorization: `Bearer ${token}` } } : undefined;
 }
 
 /** Open a client, run `body` with it, and always give the session back. */
 export async function withClient(url, name, key, body) {
-  const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: authHeaders(key) });
+  const transport = new StreamableHTTPClientTransport(new URL(url), {
+    requestInit: authHeaders(key),
+  });
   const client = new Client({ name, version: '1.0.0' });
   try {
     await client.connect(transport);
@@ -60,12 +64,10 @@ export async function withClient(url, name, key, body) {
 }
 
 /** Call one tool over its own session, returning the parsed result. */
-export const callTool = (url, name, key, toolName, args) => withClient(
-  url,
-  name,
-  key,
-  async (client) => parseResult(await client.callTool({ name: toolName, arguments: args })),
-);
+export const callTool = (url, name, key, toolName, args) =>
+  withClient(url, name, key, async (client) =>
+    parseResult(await client.callTool({ name: toolName, arguments: args })),
+  );
 
 const ATTEMPTS = 5;
 const DELAY_MS = 250;
@@ -82,10 +84,14 @@ export async function reachable(url, name, key) {
       return true;
     } catch (error) {
       if (attempt === ATTEMPTS) {
-        console.error(`MCP probe: ${url} unreachable after ${ATTEMPTS} attempts (${error.message})`);
+        console.error(
+          `MCP probe: ${url} unreachable after ${ATTEMPTS} attempts (${error.message})`,
+        );
         return false;
       }
-      await new Promise((resolve) => { setTimeout(resolve, DELAY_MS * attempt); });
+      await new Promise((resolve) => {
+        setTimeout(resolve, DELAY_MS * attempt);
+      });
     }
   }
   return false;

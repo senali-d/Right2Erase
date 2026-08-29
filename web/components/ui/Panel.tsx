@@ -31,10 +31,14 @@ export function Panel({
     <section className={`rounded border ${TONE_BORDER[tone]} bg-surface`}>
       {title ? (
         <header className="flex items-baseline justify-between gap-4 border-b border-line px-4 py-2.5">
-          <h2 className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${TONE_TITLE[tone]}`}>
+          <h2
+            className={`text-[11px] font-semibold uppercase tracking-[0.14em] ${TONE_TITLE[tone]}`}
+          >
             {title}
           </h2>
-          {aside ? <div className="text-[11px] text-ink-faint">{aside}</div> : null}
+          {aside ? (
+            <div className="text-[11px] text-ink-faint">{aside}</div>
+          ) : null}
         </header>
       ) : null}
       <div className="p-4">{children}</div>
@@ -42,10 +46,18 @@ export function Panel({
   );
 }
 
-export function Field({ label, children }: { label: string; children: ReactNode }) {
+export function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: ReactNode;
+}) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-[0.14em] text-ink-faint">{label}</div>
+      <div className="text-[10px] uppercase tracking-[0.14em] text-ink-faint">
+        {label}
+      </div>
       <div className="mt-1 text-ink">{children}</div>
     </div>
   );

@@ -2,7 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { NextResponse } from 'next/server';
 import { caseGet } from '@/lib/mcp';
-import { computeTruth, DEFAULT_DATABASE_URL } from '../../../../../../fixture/scripts/truth-core.js';
+import {
+  computeTruth,
+  DEFAULT_DATABASE_URL,
+} from '../../../../../../fixture/scripts/truth-core.js';
 import { buildManifest } from '../../../../../../agent/build-plan-manifest.js';
 
 export const runtime = 'nodejs';
@@ -30,8 +33,9 @@ export const dynamic = 'force-dynamic';
 type TruthRow = { key: string; expected: number; found: number; ok: boolean };
 
 function cachePath(caseId: string): string {
-  const dir = process.env.OUBLIETTE_TRUTH_DIR
-    || path.resolve(process.cwd(), '..', '.oubliette', 'truth');
+  const dir =
+    process.env.OUBLIETTE_TRUTH_DIR ||
+    path.resolve(process.cwd(), '..', '.oubliette', 'truth');
   // caseId comes from the route path; keep it to the uuid shape the case store
   // issues so it can never walk out of the cache directory.
   const safe = /^[0-9a-fA-F-]{36}$/.test(caseId) ? caseId : null;
@@ -57,7 +61,10 @@ function writeCache(caseId: string, report: unknown): void {
   }
 }
 
-export async function GET(_request: Request, { params }: { params: Promise<{ caseId: string }> }) {
+export async function GET(
+  _request: Request,
+  { params }: { params: Promise<{ caseId: string }> },
+) {
   const { caseId } = await params;
 
   let record;
@@ -69,7 +76,11 @@ export async function GET(_request: Request, { params }: { params: Promise<{ cas
       { status: 502 },
     );
   }
-  if (!record) return NextResponse.json({ error: `case not found: ${caseId}` }, { status: 404 });
+  if (!record)
+    return NextResponse.json(
+      { error: `case not found: ${caseId}` },
+      { status: 404 },
+    );
 
   let expected;
   try {
@@ -82,46 +93,72 @@ export async function GET(_request: Request, { params }: { params: Promise<{ cas
     // successful erasure, not a fault. Serve the report computed before
     // execution rather than dropping the verification entirely.
     const cached = readCache(caseId);
-    if (cached) return NextResponse.json({ truth: { ...(cached as object), post_execution: true } });
+    if (cached)
+      return NextResponse.json({
+        truth: { ...(cached as object), post_execution: true },
+      });
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'failed to compute ground truth' },
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : 'failed to compute ground truth',
+      },
       { status: 502 },
     );
   }
 
   const actual = buildManifest(record.findings ?? []);
 
-  const rows: TruthRow[] = Object.entries(expected.delete as Record<string, number>).map(
-    ([key, value]) => {
-      const found = (actual.delete as Record<string, number>)[key] ?? 0;
-      return { key, expected: value, found, ok: found === value };
-    },
-  );
+  const rows: TruthRow[] = Object.entries(
+    expected.delete as Record<string, number>,
+  ).map(([key, value]) => {
+    const found = (actual.delete as Record<string, number>)[key] ?? 0;
+    return { key, expected: value, found, ok: found === value };
+  });
 
   // A matching count per key is not enough on its own: an extra target would
   // make an over-broad plan look correct, so the manifest is a closed set.
-  const expectedKeys = new Set(Object.keys(expected.delete as Record<string, number>));
-  const unexpectedKeys = Object.keys(actual.delete as Record<string, number>)
-    .filter((key) => !expectedKeys.has(key));
+  const expectedKeys = new Set(
+    Object.keys(expected.delete as Record<string, number>),
+  );
+  const unexpectedKeys = Object.keys(
+    actual.delete as Record<string, number>,
+  ).filter((key) => !expectedKeys.has(key));
 
   // Compare withheld records by durable identity rather than by count, which
   // would accept a substituted record.
   const identity = (r: { table?: string; id?: unknown }) =>
     r && r.table != null && r.id != null ? `${r.table}:${r.id}` : null;
-  const expectedWithheld = new Set((expected.withhold as { table: string; id: unknown }[]).map(identity));
-  const foundWithheld = new Set((actual.withhold as { table: string; id: unknown }[]).map(identity));
-  const missingWithheld = [...expectedWithheld].filter((id) => !foundWithheld.has(id));
-  const unexpectedWithheld = [...foundWithheld].filter((id) => !expectedWithheld.has(id));
+  const expectedWithheld = new Set(
+    (expected.withhold as { table: string; id: unknown }[]).map(identity),
+  );
+  const foundWithheld = new Set(
+    (actual.withhold as { table: string; id: unknown }[]).map(identity),
+  );
+  const missingWithheld = [...expectedWithheld].filter(
+    (id) => !foundWithheld.has(id),
+  );
+  const unexpectedWithheld = [...foundWithheld].filter(
+    (id) => !expectedWithheld.has(id),
+  );
 
   // The decoy shares the subject's display name. Sweeping it up is the failure
   // this whole fixture exists to catch, so it gets its own verdict rather than
   // being folded into a count.
   const erasedAccountIds = new Set(
     (record.findings ?? [])
-      .filter((f) => f.system === 'postgres' && f.record_type === 'account' && f.disposition === 'erase')
+      .filter(
+        (f) =>
+          f.system === 'postgres' &&
+          f.record_type === 'account' &&
+          f.disposition === 'erase',
+      )
       .map((f) => String(f.record_id)),
   );
-  const mustNotTouch = (expected.must_not_touch as { id: number; email: string }[]).map((account) => ({
+  const mustNotTouch = (
+    expected.must_not_touch as { id: number; email: string }[]
+  ).map((account) => ({
     ...account,
     swept: erasedAccountIds.has(String(account.id)),
   }));

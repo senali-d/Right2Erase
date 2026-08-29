@@ -10,7 +10,9 @@ export async function GET() {
     return NextResponse.json({ cases: await caseList() });
   } catch (error) {
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'failed to list cases' },
+      {
+        error: error instanceof Error ? error.message : 'failed to list cases',
+      },
       { status: 502 },
     );
   }
@@ -21,11 +23,19 @@ export async function POST(request: Request) {
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: 'expected a JSON body' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'expected a JSON body' },
+      { status: 400 },
+    );
   }
 
-  const subjectEmail = typeof body.subject_email === 'string' ? body.subject_email.trim() : '';
-  if (!subjectEmail) return NextResponse.json({ error: 'subject_email is required' }, { status: 400 });
+  const subjectEmail =
+    typeof body.subject_email === 'string' ? body.subject_email.trim() : '';
+  if (!subjectEmail)
+    return NextResponse.json(
+      { error: 'subject_email is required' },
+      { status: 400 },
+    );
 
   // Every prepare() run creates a new case, and Oubliette cases are permanent
   // audit records with no delete path. Opening a second case for the same
@@ -33,22 +43,34 @@ export async function POST(request: Request) {
   // existing one and make the duplicate an explicit choice.
   if (body.force !== true) {
     try {
-      const existing = (await caseList()).find((c) => c.subject_email === subjectEmail);
+      const existing = (await caseList()).find(
+        (c) => c.subject_email === subjectEmail,
+      );
       if (existing) {
         return NextResponse.json(
-          { existing_case: existing, error: `a case already exists for ${subjectEmail}` },
+          {
+            existing_case: existing,
+            error: `a case already exists for ${subjectEmail}`,
+          },
           { status: 409 },
         );
       }
     } catch (error) {
       return NextResponse.json(
-        { error: error instanceof Error ? error.message : 'failed to check existing cases' },
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : 'failed to check existing cases',
+        },
         { status: 502 },
       );
     }
   }
 
-  const engine = engineFrom(typeof body.engine === 'string' ? body.engine : null);
+  const engine = engineFrom(
+    typeof body.engine === 'string' ? body.engine : null,
+  );
   const run = startPrepareRun(subjectEmail, engine);
   return NextResponse.json({ run_id: run.run_id, engine }, { status: 202 });
 }

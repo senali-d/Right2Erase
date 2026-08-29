@@ -1,0 +1,10 @@
+node_modules
+fixture/node_modules
+fixture/billing-api/node_modules
+web/node_modules
+web/.next
+*.lock
+package-lock.json
+.oubliette
+*.yml
+*.yaml

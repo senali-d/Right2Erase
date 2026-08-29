@@ -1,6 +1,12 @@
 import * as deterministic from './agent-runs.ts';
 import * as agentic from './trueforge-runs.ts';
-import { claimApprovalRequest, getRun, restoreApprovalRequest, type ApprovalRequest, type Run } from './run-store.ts';
+import {
+  claimApprovalRequest,
+  getRun,
+  restoreApprovalRequest,
+  type ApprovalRequest,
+  type Run,
+} from './run-store.ts';
 
 /**
  * Which engine investigates a case.
@@ -17,10 +23,14 @@ import { claimApprovalRequest, getRun, restoreApprovalRequest, type ApprovalRequ
 export type EngineName = 'agentic' | 'deterministic';
 
 export const DEFAULT_ENGINE: EngineName =
-  process.env.OUBLIETTE_ENGINE === 'deterministic' ? 'deterministic' : 'agentic';
+  process.env.OUBLIETTE_ENGINE === 'deterministic'
+    ? 'deterministic'
+    : 'agentic';
 
 export function engineFrom(value: string | null | undefined): EngineName {
-  return value === 'deterministic' || value === 'agentic' ? value : DEFAULT_ENGINE;
+  return value === 'deterministic' || value === 'agentic'
+    ? value
+    : DEFAULT_ENGINE;
 }
 
 export function startPrepareRun(subjectEmail: string, engine: EngineName): Run {
@@ -37,7 +47,10 @@ export function startPrepareRun(subjectEmail: string, engine: EngineName): Run {
  * specific plan; writing one for a plan that is not the one about to run is
  * worse than refusing outright.
  */
-export function assertApprovable(paused: Run, args: { case_id: string; plan_hash: string }): void {
+export function assertApprovable(
+  paused: Run,
+  args: { case_id: string; plan_hash: string },
+): void {
   // The run id arrives from the client, so it is not trusted to identify which
   // case is being approved. Resuming a paused run from a different case would
   // validate this case's plan and then execute that one's erasure - the
@@ -66,7 +79,10 @@ export function assertApprovable(paused: Run, args: { case_id: string; plan_hash
  * request - finds nothing left to claim and is told so, instead of submitting
  * the same tool call again and racing the first.
  */
-export function claimApproval(paused: Run, args: { case_id: string; plan_hash: string }): ApprovalRequest {
+export function claimApproval(
+  paused: Run,
+  args: { case_id: string; plan_hash: string },
+): ApprovalRequest {
   assertApprovable(paused, args);
   const claimed = claimApprovalRequest(paused.run_id);
   if (!claimed) throw new Error('this approval has already been submitted');
@@ -92,7 +108,10 @@ export function approveRun(
   args: { case_id: string; plan_hash: string; approved_by: string },
 ): Run {
   if (paused?.session_id && claimed) {
-    return agentic.resolveApproval(paused, claimed, { allow: true, approvedBy: args.approved_by });
+    return agentic.resolveApproval(paused, claimed, {
+      allow: true,
+      approvedBy: args.approved_by,
+    });
   }
   return deterministic.startExecuteRun(args);
 }
@@ -102,7 +121,10 @@ export function approveRun(
  * case. The id comes from the client, so the case it belongs to is checked
  * here rather than assumed.
  */
-export function pausedRunFor(runId: string | null | undefined, caseId: string): Run | null {
+export function pausedRunFor(
+  runId: string | null | undefined,
+  caseId: string,
+): Run | null {
   if (!runId) return null;
   const run = getRun(runId);
   if (!run?.approval_request || run.case_id !== caseId) return null;

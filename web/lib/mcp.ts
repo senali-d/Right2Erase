@@ -17,14 +17,26 @@ import { parseResult } from '../../agent/create-agent.js';
  */
 
 function tokenFor(name: string): string | undefined {
-  return process.env[`MCP_AUTH_TOKEN_${name.toUpperCase()}`] || process.env.MCP_AUTH_TOKEN || undefined;
+  return (
+    process.env[`MCP_AUTH_TOKEN_${name.toUpperCase()}`] ||
+    process.env.MCP_AUTH_TOKEN ||
+    undefined
+  );
 }
 
-async function withOublietteClient<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+async function withOublietteClient<T>(
+  fn: (client: Client) => Promise<T>,
+): Promise<T> {
   const client = new Client({ name: 'oubliette-web', version: '1.0.0' });
   const token = tokenFor('oubliette');
-  const requestInit = token ? { headers: { authorization: `Bearer ${token}` } } : undefined;
-  await client.connect(new StreamableHTTPClientTransport(new URL(MCP_SERVERS.oubliette), { requestInit }));
+  const requestInit = token
+    ? { headers: { authorization: `Bearer ${token}` } }
+    : undefined;
+  await client.connect(
+    new StreamableHTTPClientTransport(new URL(MCP_SERVERS.oubliette), {
+      requestInit,
+    }),
+  );
   try {
     return await fn(client);
   } finally {
@@ -32,9 +44,13 @@ async function withOublietteClient<T>(fn: (client: Client) => Promise<T>): Promi
   }
 }
 
-async function readTool(name: 'case_get' | 'case_list', args: Record<string, unknown>) {
+async function readTool(
+  name: 'case_get' | 'case_list',
+  args: Record<string, unknown>,
+) {
   return withOublietteClient(async (client) =>
-    parseResult(await client.callTool({ name, arguments: args })));
+    parseResult(await client.callTool({ name, arguments: args })),
+  );
 }
 
 /**
@@ -57,17 +73,31 @@ export async function recordApproval(
   reason?: string,
 ): Promise<void> {
   await withOublietteClient(async (client) =>
-    parseResult(await client.callTool({
-      name: 'plan_approve',
-      arguments: { case_id: caseId, plan_hash: planHash, approved_by: approvedBy, ...(reason ? { reason } : {}) },
-    })));
+    parseResult(
+      await client.callTool({
+        name: 'plan_approve',
+        arguments: {
+          case_id: caseId,
+          plan_hash: planHash,
+          approved_by: approvedBy,
+          ...(reason ? { reason } : {}),
+        },
+      }),
+    ),
+  );
 }
 
 export type CaseSummary = {
   id: string;
   subject_email: string;
   subject_name: string | null;
-  status: 'discovered' | 'planned' | 'approved' | 'executing' | 'completed' | 'failed';
+  status:
+    | 'discovered'
+    | 'planned'
+    | 'approved'
+    | 'executing'
+    | 'completed'
+    | 'failed';
   created_at: string;
   updated_at: string;
   revision: number;
@@ -132,7 +162,9 @@ export type CaseRecord = Omit<CaseSummary, 'finding_count'> & {
   certificate?: Certificate;
 };
 
-export async function caseList(status?: CaseSummary['status']): Promise<CaseSummary[]> {
+export async function caseList(
+  status?: CaseSummary['status'],
+): Promise<CaseSummary[]> {
   const value = await readTool('case_list', status ? { status } : {});
   return Array.isArray(value) ? value : [];
 }
@@ -142,7 +174,8 @@ export async function caseGet(caseId: string): Promise<CaseRecord | null> {
   try {
     return await readTool('case_get', { case_id: caseId });
   } catch (error) {
-    if (error instanceof Error && /case not found/i.test(error.message)) return null;
+    if (error instanceof Error && /case not found/i.test(error.message))
+      return null;
     throw error;
   }
 }
