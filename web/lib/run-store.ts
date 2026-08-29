@@ -38,7 +38,12 @@ export type RehearsalAttempt = {
 };
 
 export type RehearsalEntry = {
-  account_id: number;
+  /**
+   * Absent on the agentic engine: the rehearsal tool result does not name the
+   * account, and inventing a zero would render as "account 0" in the sandbox
+   * panel. The deterministic engine drives the rehearsal per account and knows.
+   */
+  account_id?: number;
   snapshot_id: string;
   attempts: RehearsalAttempt[];
 };

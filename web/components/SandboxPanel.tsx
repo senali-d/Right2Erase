@@ -80,8 +80,8 @@ export function SandboxPanel({
         {rehearsal.map((entry) => (
           <div key={entry.snapshot_id}>
             <div className="mb-2 text-[11px] text-ink-faint">
-              account {entry.account_id} · snapshot {entry.snapshot_id.slice(0, 8)}… · deleted after
-              rehearsal
+              {entry.account_id != null ? `account ${entry.account_id} · ` : ''}
+              snapshot {entry.snapshot_id.slice(0, 8)}… · deleted after rehearsal
             </div>
             <ul className="space-y-2">
               {entry.attempts.map((attempt, index) => (

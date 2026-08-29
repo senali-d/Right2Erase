@@ -37,6 +37,32 @@ async function readTool(name: 'case_get' | 'case_list', args: Record<string, unk
     parseResult(await client.callTool({ name, arguments: args })));
 }
 
+/**
+ * Record a human's approval of a plan.
+ *
+ * The one write this module makes, and it is the reason it can: the approving
+ * identity is the operator sitting in front of the control center, and only
+ * the control center knows it. Recording it here is what makes the approval a
+ * fact about a person rather than a name the agent supplied - execution and
+ * the certificate both read the approver from this row.
+ *
+ * It is not an execution path: plan_approve stores an approval, and Oubliette
+ * still re-validates the plan hash and case revision before anything is
+ * deleted.
+ */
+export async function recordApproval(
+  caseId: string,
+  planHash: string,
+  approvedBy: string,
+  reason?: string,
+): Promise<void> {
+  await withOublietteClient(async (client) =>
+    parseResult(await client.callTool({
+      name: 'plan_approve',
+      arguments: { case_id: caseId, plan_hash: planHash, approved_by: approvedBy, ...(reason ? { reason } : {}) },
+    })));
+}
+
 export type CaseSummary = {
   id: string;
   subject_email: string;

@@ -63,29 +63,43 @@ type ToolResponseEvent = { toolCallId?: string; isError?: boolean; content?: unk
 async function consume(
   runId: string,
   stream: AsyncIterable<{ data: TrueForgeApi.TurnStreamingEvent }>,
-): Promise<{ pausedForApproval: boolean }> {
+): Promise<void> {
   const events = new Map<string, TrueForgeApi.TurnStreamingEvent>();
   const toolNames = new Map<string, string>();
   const startedAt = new Map<string, number>();
-  let pausedForApproval = false;
+
+  /**
+   * Learn the name of each tool call the message announces.
+   *
+   * Called after every merge as well as on the bare event, because a streamed
+   * call arrives in pieces: the `model.message` that opens it carries no
+   * `toolCalls` at all, and the name only exists once its deltas have been
+   * merged in. Reading the event once, when it first appears, leaves every
+   * call unnamed - which loses phase tracking, the case id, and the rehearsal
+   * transcript on any normal streamed run. Recording is idempotent, so
+   * re-harvesting the same message as it fills in is harmless, and the start
+   * time is kept from the first sighting rather than the last.
+   */
+  const harvestToolCalls = (message: TrueForgeApi.ModelMessageEvent) => {
+    for (const call of message.toolCalls ?? []) {
+      const name = call.toolInfo?.name;
+      if (!name || toolNames.has(call.id)) continue;
+      toolNames.set(call.id, name);
+      startedAt.set(call.id, Date.now());
+    }
+  };
 
   for await (const { data: event } of stream) {
     if (isEventDelta(event)) {
       const base = events.get(event.id);
-      if (base) mergeEventDelta(base, event);
+      if (!base) continue;
+      mergeEventDelta(base, event);
+      if (base.type === 'model.message') harvestToolCalls(base as TrueForgeApi.ModelMessageEvent);
       continue;
     }
     events.set(event.id, event);
 
-    if (event.type === 'model.message') {
-      const message = event as TrueForgeApi.ModelMessageEvent;
-      for (const call of message.toolCalls ?? []) {
-        const name = call.toolInfo?.name;
-        if (!name) continue;
-        toolNames.set(call.id, name);
-        startedAt.set(call.id, Date.now());
-      }
-    }
+    if (event.type === 'model.message') harvestToolCalls(event as TrueForgeApi.ModelMessageEvent);
 
     if (event.type === 'tool.response') {
       const response = event as unknown as ToolResponseEvent;
@@ -108,24 +122,24 @@ async function consume(
       if (tool === 'db_rehearse_deletion_plan') {
         const outcome = parseContent(response.content) as { attempts?: RehearsalAttempt[] } | null;
         if (outcome?.attempts) {
-          // account_id is not on the tool result; the snapshot the rehearsal
-          // ran against is identified by the call that produced it.
-          recordRehearsal(runId, { account_id: 0, snapshot_id: callId, attempts: outcome.attempts });
+          // The tool result does not name the account, so the entry is
+          // identified by the call that produced it.
+          recordRehearsal(runId, { snapshot_id: callId, attempts: outcome.attempts });
         }
       }
     }
 
     if (event.type === 'tool.approval_required') {
+      // The turn is now paused. The run carries the pending call so the UI can
+      // resume it when a human decides; that record is the signal, so there is
+      // nothing to return to the caller.
       const pending = event as TrueForgeApi.ToolApprovalRequiredEvent;
-      pausedForApproval = true;
       setApprovalRequest(runId, {
         thread_id: pending.threadId,
         tool_call_ids: pending.toolCalls.map((ref) => ref.id),
       });
     }
   }
-
-  return { pausedForApproval };
 }
 
 export function startPrepareRun(subjectEmail: string): Run {

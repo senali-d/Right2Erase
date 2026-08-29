@@ -43,21 +43,27 @@ export function approveRun(
   args: { case_id: string; plan_hash: string; approved_by: string },
 ): Run {
   if (paused?.session_id && paused.approval_request) {
+    // The run id arrives from the client, so it is not trusted to identify
+    // which case is being approved. Resuming a paused run from a different
+    // case would validate this case's plan and then execute that one's
+    // erasure - the approval a human gave and the deletion that happens have
+    // to be the same case.
+    if (paused.case_id !== args.case_id) {
+      throw new Error('that paused run belongs to a different case');
+    }
     return agentic.resolveApproval(paused, { allow: true, approvedBy: args.approved_by });
   }
   return deterministic.startExecuteRun(args);
 }
 
-export function denyRun(run: Run, reason: string, deniedBy: string): Run {
-  if (!run.session_id || !run.approval_request) {
-    throw new Error('only a run paused at the approval gate can be denied');
-  }
-  return agentic.resolveApproval(run, { allow: false, approvedBy: deniedBy, reason });
-}
-
-/** The most recent run for a case that is paused at the approval gate, if any. */
-export function pausedRunFor(runId: string | null | undefined): Run | null {
+/**
+ * The run behind an id, but only if it is paused at the approval gate for this
+ * case. The id comes from the client, so the case it belongs to is checked
+ * here rather than assumed.
+ */
+export function pausedRunFor(runId: string | null | undefined, caseId: string): Run | null {
   if (!runId) return null;
   const run = getRun(runId);
-  return run?.approval_request ? run : null;
+  if (!run?.approval_request || run.case_id !== caseId) return null;
+  return run;
 }

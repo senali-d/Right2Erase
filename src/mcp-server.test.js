@@ -112,6 +112,25 @@ test('a plan cannot be built before discovery is marked complete', { skip }, asy
   await assert.rejects(call('plan_create', { case_id: caseId }), /has not completed discovery/);
 });
 
+test('execution refuses an approver identity that disagrees with the recorded approval', { skip }, async () => {
+  const caseId = await newCase();
+  await call('finding_add', { case_id: caseId, system: 'postgres', record_type: 'order', record_id: 1 });
+  await call('case_complete_discovery', { case_id: caseId });
+  const plan = await call('plan_create', { case_id: caseId });
+  await call('plan_approve', { case_id: caseId, plan_hash: plan.plan_hash, approved_by: 'the-operator' });
+
+  // A caller may assert who approved, and a wrong assertion is refused. It is
+  // never a way to nominate an approver: the recorded approval is the
+  // authority, and this is the check that keeps a claimed name from becoming
+  // one.
+  await assert.rejects(
+    call('oubliette_execute_erasure', {
+      case_id: caseId, plan_hash: plan.plan_hash, approved_by: 'somebody-else',
+    }),
+    /approved_by does not match the approving identity/,
+  );
+});
+
 test('a built plan carries the retained refund as withheld, never as an erase action', { skip }, async () => {
   const caseId = await newCase();
   await call('finding_add_many', {

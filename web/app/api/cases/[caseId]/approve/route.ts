@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { caseGet } from '@/lib/mcp';
+import { caseGet, recordApproval } from '@/lib/mcp';
 import { approveRun, pausedRunFor } from '@/lib/engine';
 
 export const runtime = 'nodejs';
@@ -64,8 +64,25 @@ export async function POST(request: Request, { params }: { params: Promise<{ cas
   // approving resumes that turn; the deterministic engine has already returned,
   // so approving starts execution. The caller passes the run it is looking at
   // and approveRun picks the right route.
-  const run = approveRun(pausedRunFor(runId), {
-    case_id: caseId, plan_hash: planHash, approved_by: approvedBy,
-  });
-  return NextResponse.json({ run_id: run.run_id }, { status: 202 });
+  const paused = pausedRunFor(runId, caseId);
+
+  try {
+    // The agent is paused holding a formed call to the destructive tool, and
+    // resuming runs it immediately - so the operator's identity has to be on
+    // record first. It is known only here, and Oubliette treats the stored
+    // approval as the sole authority, which is what puts a real person in the
+    // audit trail rather than a name some other component chose.
+    //
+    // The deterministic engine records its own approval as part of executing,
+    // so doing it here too would write the same approval twice.
+    if (paused) await recordApproval(caseId, planHash, approvedBy);
+
+    const run = approveRun(paused, { case_id: caseId, plan_hash: planHash, approved_by: approvedBy });
+    return NextResponse.json({ run_id: run.run_id }, { status: 202 });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : 'failed to approve' },
+      { status: 409 },
+    );
+  }
 }

@@ -197,7 +197,13 @@ export function createServer({ interfaces = defaultExecutionInterfaces } = {}) {
     inputSchema: {
       case_id: caseId,
       plan_hash: z.string().length(64),
-      approved_by: z.string().min(1).max(200),
+      // Optional, and you are not expected to supply it. The human approval
+      // already recorded for this plan is what authorises execution and what
+      // the certificate attributes it to. Passing a name only asserts a belief
+      // about who approved; if it disagrees with the recorded approval the
+      // execution is refused. Naming an approver you were not told is how an
+      // audit trail ends up crediting an identity nobody chose.
+      approved_by: z.string().min(1).max(200).optional(),
     }, annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
   }, async ({ case_id, plan_hash, approved_by }) => text(await oublietteExecuteErasure({
     caseId: case_id, planHash: plan_hash, approvedBy: approved_by, interfaces,
