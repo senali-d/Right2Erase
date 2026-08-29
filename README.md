@@ -81,6 +81,81 @@ is the terminal equivalent of that screen.
 Other useful scripts: `npm test` runs the full suite, `npm run web:build`
 produces a production build, and `npm run reset` re-seeds ShopKart only.
 
+## Deploying
+
+The whole demo ships as **one container**: Postgres, MinIO, the billing API, the
+four MCP adapters, the TrueForge harness, and the Next.js control center, all on
+loopback. That is not packaging convenience. `src/postgres-executor.js` and
+`src/minio-executor.js` refuse to delete anything whose host is not `localhost`,
+and refuse to run at all when `NODE_ENV=production`. Splitting the stores across
+managed services would mean weakening the guards this project exists to
+demonstrate, so instead the deployment satisfies them.
+
+```bash
+docker build -t oubliette .
+docker run --rm -p 3000:3000 -e OPENAI_API_KEY=sk-... -v oubliette-state:/data oubliette
+```
+
+First boot runs `initdb` and seeds 200 ShopKart accounts, so give it a minute or
+two before the UI answers.
+
+### On Railway
+
+`railway.json` builds from the `Dockerfile` and health-checks `/`. Create one
+service from this repo, attach a **volume mounted at `/data`**, and set a single
+variable:
+
+```
+OPENAI_API_KEY=sk-...
+```
+
+Everything else has a working default in `scripts/railway-entrypoint.sh`. If
+`OPENAI_API_KEY` is missing the container still boots and still demos: it logs a
+warning, skips the TrueForge harness, and falls back to the deterministic
+engine, which drives the same MCP servers through the same approval gate.
+
+Two variables are worth knowing about because setting them incorrectly breaks
+the demo rather than degrading it:
+
+- **Do not set `NODE_ENV`.** `next start` sets its own; exporting `production` to
+  the whole container disarms both destructive executors, and **Approve &
+  execute** fails with `sandbox-only`.
+- **Do not set `MCP_AUTH_TOKEN`.** All four adapters stay on `127.0.0.1`, which
+  is the case `mcp/http-transport.js` lets through without one.
+
+Only `/data` is persistent, and it holds one thing: Oubliette's SQLite audit
+trail - cases, plans, approvals, and the immutable erasure certificates. It
+survives redeploys. ShopKart itself is reseeded on every boot, which is both
+free (the seed is deterministic, so the data comes back identical) and necessary
+(the billing API keeps its customers in memory and only the seed populates it).
+The rehearsal sandbox is deliberately *not* on the volume: those files are
+complete copies of a subject's personal data, and a crash should leave them on a
+disk that dies with the container.
+
+Sizing, measured on the built image: **~400 MB idle** with everything including
+TrueForge, **~500 MB peak** while a case runs, and ~335 MB if the harness is
+skipped. That fits Railway's Trial (1 GB, $5 one-time credit) with room to
+spare. It does not fit the Free plan: the 0.5 GB ceiling is below the measured
+peak, and the $1/month credit funds about four days of uptime regardless. At
+Trial rates the $5 covers roughly a month of idle hosting, so deploy near the
+day you need it. Railway's serverless sleep will not stretch that - the `pg`
+pools hold a connection open, which is exactly what keeps a service awake.
+
+The four MCP servers run as one process in the container
+(`scripts/mcp-all.js`) rather than the four `npm run dev` starts, which buys
+back ~110 MB of idle V8 heaps. Nothing else about them differs.
+
+### Between demo takes, deployed
+
+```bash
+railway ssh -- /app/scripts/railway-reset.sh
+```
+
+This clears Oubliette's state and restarts the container, which reseeds
+ShopKart. It is the deployed equivalent of `./scripts/demo-reset.sh`, and it
+exists for the same reason: cases are permanent audit records, so a subject who
+already has one cannot be investigated again until the case store is cleared.
+
 ## Repository
 
 - `fixture/` - ShopKart fake services, schema, seed data, and operator-only truth checker
@@ -89,6 +164,7 @@ produces a production build, and `npm run reset` re-seeds ShopKart only.
 - `src/` - Oubliette: the case store, plans, approvals, and the sole destructive path
 - `web/` - the Data Erasure Control Center (Next.js)
 - `docs/` - architecture, capability map, and Phase 0 evidence
+- `Dockerfile`, `railway.json`, `scripts/railway-*.sh` - the single-container deployment
 
 ## Qodo Code Review Evidence
 

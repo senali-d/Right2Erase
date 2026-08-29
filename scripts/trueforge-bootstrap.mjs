@@ -105,22 +105,6 @@ export async function bootstrap() {
     await readFile(new URL('../agent/oubliette-agent.json', import.meta.url), 'utf8'),
   );
 
-  // POST creates; a 409 means the name is taken, so replace that agent's
-  // manifest instead. Agents are keyed by a generated immutable agent_id, not
-  // by name, so the update path has to resolve the name to an id first.
-  try {
-    await send('POST', '/api/v1/agents', definition);
-    console.log(`agent: created ${definition.name}`);
-  } catch (error) {
-    if (!/-> 409:/.test(error.message)) throw error;
-    const listed = await (await fetch(`${BASE}/api/v1/agents`)).json();
-    const existing = (listed.data || []).find((agent) => agent.name === definition.name);
-    if (!existing) throw new Error(`${definition.name} reported as taken but is not listed`);
-    const agentId = existing.agent_id || existing.id;
-    await send('PUT', `/api/v1/agents/${agentId}`, { manifest: definition.manifest });
-    console.log(`agent: updated ${definition.name} (${agentId})`);
-  }
-
   const model = definition.manifest.model.name;
   const [providerType, modelName] = model.split('/');
 
@@ -193,6 +177,30 @@ export async function bootstrap() {
     console.warn(`\nWARNING: model ${model} is not configured, and OPENAI_API_KEY is not set.`);
     console.warn(`Configured: ${names(providers).join(', ') || '(none)'}`);
     console.warn('Put OPENAI_API_KEY in .env and re-run with --env-file=.env.');
+  }
+
+  // The agent is registered last because TrueForge validates the model its
+  // manifest names against the configured providers and rejects the write with
+  // a 422 if that model does not exist yet. Against a TrueForge that has been
+  // used before, the provider is already there and the order does not show;
+  // against a fresh one - a teammate's first run, or a container that starts
+  // with empty settings on every boot - registering the agent first fails
+  // every time.
+  //
+  // POST creates; a 409 means the name is taken, so replace that agent's
+  // manifest instead. Agents are keyed by a generated immutable agent_id, not
+  // by name, so the update path has to resolve the name to an id first.
+  try {
+    await send('POST', '/api/v1/agents', definition);
+    console.log(`agent: created ${definition.name}`);
+  } catch (error) {
+    if (!/-> 409:/.test(error.message)) throw error;
+    const listed = await (await fetch(`${BASE}/api/v1/agents`)).json();
+    const existing = (listed.data || []).find((agent) => agent.name === definition.name);
+    if (!existing) throw new Error(`${definition.name} reported as taken but is not listed`);
+    const agentId = existing.agent_id || existing.id;
+    await send('PUT', `/api/v1/agents/${agentId}`, { manifest: definition.manifest });
+    console.log(`agent: updated ${definition.name} (${agentId})`);
   }
 
   console.log(`\nReady. Agent "${definition.name}" is available at ${BASE}.`);
