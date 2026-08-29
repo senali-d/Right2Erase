@@ -61,7 +61,8 @@ test('db_find_accounts refuses an email that resolves to more than one account',
   const { rows } = await client.query("SELECT id FROM accounts WHERE email = ANY($1::text[]) ORDER BY id", [
     ['ravi.sharma@example.com', 'r.sharma@example.net'],
   ]);
-  assert.equal(rows.length, 2, 'fixture must be seeded with both the subject and the decoy');
+  assert.equal(rows.length, 2,
+    'the fixture needs both the subject and the decoy; a completed erasure run removes the subject, so re-seed with ./scripts/demo-reset.sh');
   try {
     for (const row of rows) {
       await client.query(

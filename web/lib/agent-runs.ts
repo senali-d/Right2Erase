@@ -1,5 +1,5 @@
 import { createAgent } from '../../agent/create-agent.js';
-import { attachCaseId, createRun, finishRun, recordToolCall, type Run } from './run-store';
+import { attachCaseId, createRun, finishRun, recordToolCall, type Run } from './run-store.ts';
 
 /**
  * Runs the TrueForge agent on behalf of the UI.

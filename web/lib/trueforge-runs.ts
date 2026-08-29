@@ -2,7 +2,7 @@ import { TrueForge, type TrueForgeApi, isEventDelta, mergeEventDelta } from '@tr
 import {
   attachCaseId, createRun, finishRun, recordRehearsal, recordToolCall,
   setApprovalRequest, setSessionId, type RehearsalAttempt, type Run,
-} from './run-store';
+} from './run-store.ts';
 
 /**
  * Drives the erasure agent on the TrueForge harness.

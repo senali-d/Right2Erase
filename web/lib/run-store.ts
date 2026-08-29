@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { PHASES, type Phase, phaseForTool, phaseIndex } from './phases';
+import { PHASES, type Phase, phaseForTool, phaseIndex } from './phases.ts';
 
 /**
  * Tracks one agent invocation so the UI can show live progress.

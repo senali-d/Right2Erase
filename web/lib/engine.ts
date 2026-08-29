@@ -1,6 +1,6 @@
-import * as deterministic from './agent-runs';
-import * as agentic from './trueforge-runs';
-import { getRun, type Run } from './run-store';
+import * as deterministic from './agent-runs.ts';
+import * as agentic from './trueforge-runs.ts';
+import { getRun, type Run } from './run-store.ts';
 
 /**
  * Which engine investigates a case.
