@@ -180,7 +180,21 @@ mkdir -p "$(dirname "$OUBLIETTE_DB_PATH")" "$OUBLIETTE_RUNS_DIR" \
 # shape is unknown - so it is cleared exactly like a mismatch would be.
 profile_stamp="$(dirname "$OUBLIETTE_DB_PATH")/.seed-profile"
 fixture_fingerprint="${SEED_PROFILE}:${SEED_ACCOUNTS:-default}"
-if [[ -f "$OUBLIETTE_DB_PATH" ]] \
+
+# The database is the common case, but a prior boot can leave persisted state
+# behind without it: a crash between clearing the db and writing the stamp, or
+# a volume that only ever accumulated run/truth artifacts. Any of the four is
+# evidence of prior state, so all of them gate the fingerprint check - not just
+# the db file - or a missing db would let a stale stamp and stale artifacts
+# survive untouched.
+has_prior_state=false
+if [[ -f "$OUBLIETTE_DB_PATH" ]] || [[ -f "$profile_stamp" ]] \
+  || [[ -n "$(ls -A "$OUBLIETTE_RUNS_DIR" 2>/dev/null)" ]] \
+  || [[ -n "$(ls -A "$OUBLIETTE_TRUTH_DIR" 2>/dev/null)" ]]; then
+  has_prior_state=true
+fi
+
+if [[ "$has_prior_state" == true ]] \
   && { [[ ! -f "$profile_stamp" ]] || [[ "$(cat "$profile_stamp")" != "$fixture_fingerprint" ]]; }; then
   if [[ -f "$profile_stamp" ]]; then
     echo "fixture changed: $(cat "$profile_stamp") -> ${fixture_fingerprint}; clearing stale cases" >&2
