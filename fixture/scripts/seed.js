@@ -18,6 +18,74 @@ import * as Minio from 'minio';
 const SEED = 4217;
 faker.seed(SEED);
 
+/**
+ * How much fixture to build.
+ *
+ * The five hard cases are structural, not statistical - they are the same five
+ * traps at either size - so the profile only changes how much data surrounds
+ * them. What it really controls is the subject's own footprint, because every
+ * record he owns becomes a finding the agent has to read, stage, rehearse and
+ * delete. That, not the size of the crowd, is what an investigation costs:
+ * dropping the background from 200 accounts to 20 leaves the plan at an
+ * identical 444 deletions, because none of his data comes from the background
+ * loop.
+ *
+ * 'full' is the demo - five needles found among 200 accounts, which is the
+ * whole point. 'small' is for iterating on the agent without paying for 444
+ * findings a run, and for a deployment where boot time and model tokens cost
+ * something.
+ *
+ * 'full' must stay exactly as it was: faker is seeded once for the entire run,
+ * so any change to these numbers shifts every random draw after it. That is
+ * also why 'small' is not a subset of 'full' - the two are separately
+ * deterministic, not nested.
+ */
+const PROFILES = {
+  full: {
+    accountCount: 200,
+    backgroundOrders: { min: 0, max: 14 },
+    backgroundTickets: { min: 0, max: 3 },
+    backgroundEvents: { min: 5, max: 40 },
+    subjectOrders: 12,
+    subjectTickets: 3,
+    subjectOldEmailEvents: 180,
+    subjectNewEmailEvents: 220,
+    decoyOrders: 5,
+    decoyTickets: 1,
+    decoyEvents: 60,
+  },
+  small: {
+    accountCount: 1, // 1 background + subject + decoy = 3 accounts
+    backgroundOrders: { min: 0, max: 2 },
+    backgroundTickets: { min: 0, max: 1 },
+    backgroundEvents: { min: 2, max: 5 },
+    subjectOrders: 4,
+    subjectTickets: 1,
+    subjectOldEmailEvents: 4,
+    subjectNewEmailEvents: 6,
+    decoyOrders: 2,
+    decoyTickets: 1,
+    decoyEvents: 3,
+  },
+};
+
+const PROFILE_NAME = process.env.SEED_PROFILE || 'full';
+const PROFILE = PROFILES[PROFILE_NAME];
+if (!PROFILE) {
+  console.error(`unknown SEED_PROFILE "${PROFILE_NAME}" - expected one of: ${Object.keys(PROFILES).join(', ')}`);
+  process.exit(1);
+}
+
+// Case 2 needs two *different* subject orders: one carrying the live retention
+// hold and one carrying the settled refund that is safe to delete. Telling them
+// apart is the case. Below three orders the two indices collide and the trap
+// disarms itself silently, so refuse rather than seed a fixture that looks
+// right and proves nothing.
+if (PROFILE.subjectOrders < 3) {
+  console.error(`SEED_PROFILE "${PROFILE_NAME}" gives the subject ${PROFILE.subjectOrders} orders; case 2 needs at least 3`);
+  process.exit(1);
+}
+
 const CONFIG = {
   pg: process.env.DATABASE_URL || 'postgres://shopkart:shopkart@localhost:5432/shopkart',
   minio: {
@@ -29,7 +97,9 @@ const CONFIG = {
   },
   bucket: process.env.MINIO_BUCKET || 'shopkart-uploads',
   billingUrl: process.env.BILLING_URL || 'http://localhost:4010',
-  accountCount: Number(process.env.SEED_ACCOUNTS || 200),
+  // SEED_ACCOUNTS still overrides the profile, so every existing invocation
+  // keeps working unchanged.
+  accountCount: Number(process.env.SEED_ACCOUNTS || PROFILE.accountCount),
 };
 
 // The erasure subject. Everything about him is invented.
@@ -78,7 +148,7 @@ function orderNumber(n) {
 async function main() {
   const client = new pg.Client({ connectionString: CONFIG.pg });
   await client.connect();
-  log(`\nShopKart fixture · seed=${SEED}\n`);
+  log(`\nShopKart fixture · seed=${SEED} · profile=${PROFILE_NAME}\n`);
 
   // ---------------------------------------------------------------- schema
   const { readFile } = await import('node:fs/promises');
@@ -205,11 +275,11 @@ async function main() {
       email,
       fullName: `${first} ${last}`,
       ip,
-      orders: faker.number.int({ min: 0, max: 14 }),
-      tickets: faker.number.int({ min: 0, max: 3 }),
+      orders: faker.number.int(PROFILE.backgroundOrders),
+      tickets: faker.number.int(PROFILE.backgroundTickets),
     });
 
-    await logEvents(email, ip, faker.number.int({ min: 5, max: 40 }), acct.created, '2025-08-20');
+    await logEvents(email, ip, faker.number.int(PROFILE.backgroundEvents), acct.created, '2025-08-20');
 
     if (faker.datatype.boolean(0.6)) {
       uploads.push({
@@ -235,14 +305,18 @@ async function main() {
     email: SUBJECT.email,
     fullName: SUBJECT.fullName,
     ip: SUBJECT.ip,
-    orders: 12,
-    tickets: 3,
+    orders: PROFILE.subjectOrders,
+    tickets: PROFILE.subjectTickets,
   });
   log(`\n  subject: ${SUBJECT.email} (account ${subject.id})`);
-  log('  CASE 1  foreign-key ordering trap: 12 orders + items + settled refunds hang off the account');
+  log(`  CASE 1  foreign-key ordering trap: ${PROFILE.subjectOrders} orders + items + settled refunds hang off the account`);
 
   // ------------------------------------------------- CASE 2 retention hold
-  const held = subject.orderIds[4];
+  // Relative, not a fixed 4: a small profile gives the subject fewer orders
+  // than that index assumes, and an undefined `held` takes case 4's orphan key
+  // down with it. At 12 orders this still resolves to 4, so the full fixture
+  // keeps the same held order and the same plan hash.
+  const held = subject.orderIds[Math.min(4, PROFILE.subjectOrders - 1)];
   // Live obligations are placed in the detached retention model. They retain
   // only a non-PII order reference, so the customer hierarchy can be erased.
   await client.query(
@@ -264,10 +338,10 @@ async function main() {
     email: DECOY.email,
     fullName: DECOY.fullName,
     ip: DECOY.ip,
-    orders: 5,
-    tickets: 1,
+    orders: PROFILE.decoyOrders,
+    tickets: PROFILE.decoyTickets,
   });
-  await logEvents(DECOY.email, DECOY.ip, 60, decoy.created, '2025-08-20');
+  await logEvents(DECOY.email, DECOY.ip, PROFILE.decoyEvents, decoy.created, '2025-08-20');
   uploads.push({
     accountId: decoy.id,
     key: `uploads/acct_${decoy.id}/avatar.png`,
@@ -298,9 +372,9 @@ async function main() {
      VALUES ($1,$2,false,$3,$4)`,
     [subject.id, SUBJECT.oldEmail, subject.created, switchedAt],
   );
-  await logEvents(SUBJECT.oldEmail, SUBJECT.ip, 180, subject.created, switchedAt);
-  await logEvents(SUBJECT.email, SUBJECT.ip, 220, switchedAt, '2025-08-20');
-  log(`  CASE 5  identity chain: 180 log rows filed under ${SUBJECT.oldEmail}`);
+  await logEvents(SUBJECT.oldEmail, SUBJECT.ip, PROFILE.subjectOldEmailEvents, subject.created, switchedAt);
+  await logEvents(SUBJECT.email, SUBJECT.ip, PROFILE.subjectNewEmailEvents, switchedAt, '2025-08-20');
+  log(`  CASE 5  identity chain: ${PROFILE.subjectOldEmailEvents} log rows filed under ${SUBJECT.oldEmail}`);
 
   // ---------------------------------------------------------- write objects
   for (const u of uploads) {

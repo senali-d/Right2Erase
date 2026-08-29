@@ -43,7 +43,10 @@ cd "$(dirname "$0")/.."
 : "${TRUEFORGE_BASE_URL:=http://127.0.0.1:${TRUEFORGE_PORT}}"
 : "${TRUEFORGE_AGENT:=oubliette-erasure}"
 : "${OUBLIETTE_ENGINE:=agentic}"
-: "${SEED_ACCOUNTS:=200}"
+# 'full' by default so the container demos what a laptop demos. SEED_PROFILE=small
+# builds a 3-account fixture instead: faster boot, and far fewer findings for the
+# model to work through, which is the part that costs tokens.
+: "${SEED_PROFILE:=full}"
 
 : "${OUBLIETTE_DB_PATH:=${OUBLIETTE_STATE_DIR}/oubliette.db}"
 : "${OUBLIETTE_RUNS_DIR:=${OUBLIETTE_STATE_DIR}/runs}"
@@ -58,7 +61,7 @@ export PORT HOST PGDATA MINIO_DATA_DIR TRUEFORGE_HOME OUBLIETTE_STATE_DIR \
   DATABASE_URL MINIO_HOST MINIO_PORT MINIO_ACCESS_KEY MINIO_SECRET_KEY \
   MINIO_BUCKET BILLING_URL MCP_PORT MCP_DB_PORT MCP_STORAGE_PORT \
   OUBLIETTE_MCP_PORT TRUEFORGE_BASE_URL TRUEFORGE_AGENT OUBLIETTE_ENGINE \
-  SEED_ACCOUNTS OUBLIETTE_DB_PATH OUBLIETTE_RUNS_DIR OUBLIETTE_TRUTH_DIR \
+  SEED_PROFILE OUBLIETTE_DB_PATH OUBLIETTE_RUNS_DIR OUBLIETTE_TRUTH_DIR \
   OUBLIETTE_SANDBOX_DIR
 
 pids=()
@@ -146,13 +149,37 @@ wait_for billing-api 30 curl -fsS http://127.0.0.1:4010/health
 # the agent would find no charges to erase. The seed is deterministic
 # (faker.seed(4217) in fixture/scripts/seed.js), so re-running it restores
 # byte-identical ShopKart data rather than drifting.
-step "seed shopkart (${SEED_ACCOUNTS} accounts)"
+step "seed shopkart (${SEED_PROFILE} profile)"
 npm run --silent seed
 
 # ------------------------------------------------------- oubliette + agent
 step "mcp servers"
 mkdir -p "$(dirname "$OUBLIETTE_DB_PATH")" "$OUBLIETTE_RUNS_DIR" \
   "$OUBLIETTE_TRUTH_DIR" "$OUBLIETTE_SANDBOX_DIR"
+
+# ShopKart is rebuilt from scratch above, but Oubliette's audit trail lives on
+# the volume and outlives it. That is the point of the volume - until the
+# fixture underneath changes shape.
+#
+# A case records findings as (system, record_type, record_id) against the
+# ShopKart rows it discovered. Reseeding under the same profile puts identical
+# rows back at identical ids, so those cases stay meaningful. Switching profile
+# does not: the subject is account 201 under 'full' and account 2 under
+# 'small', so every stored finding would now point at a different row, or at
+# nothing. A certificate asserting that account 201 was erased is worse than
+# useless next to a fixture that never had one.
+#
+# So the profile that produced the store is stamped beside it, and a change
+# retires the store rather than letting it quietly describe a world that no
+# longer exists. Same profile, nothing happens.
+profile_stamp="$(dirname "$OUBLIETTE_DB_PATH")/.seed-profile"
+if [[ -f "$profile_stamp" && "$(cat "$profile_stamp")" != "$SEED_PROFILE" ]]; then
+  echo "fixture profile changed: $(cat "$profile_stamp") -> ${SEED_PROFILE}; clearing stale cases" >&2
+  rm -rf "$OUBLIETTE_DB_PATH" "${OUBLIETTE_DB_PATH}-wal" "${OUBLIETTE_DB_PATH}-shm" \
+    "$OUBLIETTE_RUNS_DIR" "$OUBLIETTE_TRUTH_DIR"
+  mkdir -p "$OUBLIETTE_RUNS_DIR" "$OUBLIETTE_TRUTH_DIR"
+fi
+printf '%s' "$SEED_PROFILE" > "$profile_stamp"
 
 # All four adapters in one process - see scripts/mcp-all.js. This is the
 # process that owns both destructive executors, so NODE_ENV is stripped rather
