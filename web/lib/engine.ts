@@ -1,6 +1,6 @@
 import * as deterministic from './agent-runs.ts';
 import * as agentic from './trueforge-runs.ts';
-import { getRun, type Run } from './run-store.ts';
+import { claimApprovalRequest, getRun, restoreApprovalRequest, type ApprovalRequest, type Run } from './run-store.ts';
 
 /**
  * Which engine investigates a case.
@@ -59,21 +59,40 @@ export function assertApprovable(paused: Run, args: { case_id: string; plan_hash
 }
 
 /**
+ * Take sole ownership of a paused approval, or refuse.
+ *
+ * An approval authorises one irreversible execution, so it is claimed rather
+ * than merely read: a second POST - a double click, a retry, a replayed
+ * request - finds nothing left to claim and is told so, instead of submitting
+ * the same tool call again and racing the first.
+ */
+export function claimApproval(paused: Run, args: { case_id: string; plan_hash: string }): ApprovalRequest {
+  assertApprovable(paused, args);
+  const claimed = claimApprovalRequest(paused.run_id);
+  if (!claimed) throw new Error('this approval has already been submitted');
+  return claimed;
+}
+
+/** Hand a claim back when the work it was claimed for never started. */
+export function releaseApproval(paused: Run, request: ApprovalRequest): void {
+  restoreApprovalRequest(paused.run_id, request);
+}
+
+/**
  * Approve a plan.
  *
  * The two engines reach the same destructive tool by different routes. The
- * agentic one is paused mid-turn and resumes when the pending call is allowed;
+ * agentic one is paused mid-turn and resumes when its claimed call is allowed;
  * the deterministic one has already returned, so approving starts the
- * execution step. The UI does not need to know which - it passes the run it is
- * looking at, and the engine that produced it decides.
+ * execution step.
  */
 export function approveRun(
   paused: Run | null,
+  claimed: ApprovalRequest | null,
   args: { case_id: string; plan_hash: string; approved_by: string },
 ): Run {
-  if (paused?.session_id && paused.approval_request) {
-    assertApprovable(paused, args);
-    return agentic.resolveApproval(paused, { allow: true, approvedBy: args.approved_by });
+  if (paused?.session_id && claimed) {
+    return agentic.resolveApproval(paused, claimed, { allow: true, approvedBy: args.approved_by });
   }
   return deterministic.startExecuteRun(args);
 }

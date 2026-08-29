@@ -1,7 +1,7 @@
 import { TrueForge, type TrueForgeApi, isEventDelta, mergeEventDelta } from '@truefoundry/trueforge-sdk';
 import {
   attachCaseId, createRun, finishRun, recordRehearsal, recordToolCall,
-  setApprovalRequest, setSessionId, type RehearsalAttempt, type Run,
+  setApprovalRequest, setSessionId, type ApprovalRequest, type RehearsalAttempt, type Run,
 } from './run-store.ts';
 
 /**
@@ -203,19 +203,23 @@ export function startPrepareRun(subjectEmail: string): Run {
  * already built. Denying resolves the same call the other way and the agent
  * carries on without executing.
  */
-export function resolveApproval(paused: Run, decision: { allow: boolean; approvedBy: string; reason?: string }): Run {
+export function resolveApproval(
+  paused: Run,
+  request: ApprovalRequest,
+  decision: { allow: boolean; approvedBy: string; reason?: string },
+): Run {
   const run = createRun({ kind: 'execute', case_id: paused.case_id });
 
   void (async () => {
     try {
-      if (!paused.session_id || !paused.approval_request) {
-        throw new Error('that run is not paused at an approval gate');
-      }
+      if (!paused.session_id) throw new Error('that run is not paused at an approval gate');
       setSessionId(run.run_id, paused.session_id);
 
-      const input: TrueForgeApi.UserToolApprovalEvent[] = paused.approval_request.tool_call_ids.map((toolCallId) => ({
+      // The request is passed in rather than read off the run: it has already
+      // been claimed, so the run no longer carries it.
+      const input: TrueForgeApi.UserToolApprovalEvent[] = request.tool_call_ids.map((toolCallId) => ({
         type: 'user.tool_approval',
-        threadId: paused.approval_request!.thread_id,
+        threadId: request.thread_id,
         toolCallId,
         approval: decision.allow
           ? { status: 'allow' }

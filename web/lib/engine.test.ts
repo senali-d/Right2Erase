@@ -18,7 +18,7 @@ const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'oubliette-engine-test-'))
 process.env.OUBLIETTE_RUNS_DIR = tempDir;
 
 const { createRun, setApprovalRequest, setSessionId } = await import('./run-store.ts');
-const { assertApprovable, pausedRunFor } = await import('./engine.ts');
+const { assertApprovable, claimApproval, pausedRunFor, releaseApproval } = await import('./engine.ts');
 
 test.after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
 
@@ -79,6 +79,49 @@ test('assertApprovable still refuses a run from another case', () => {
     () => assertApprovable(run, { case_id: 'case-b', plan_hash: HASH_A }),
     /different case/,
   );
+});
+
+test('an approval can be claimed exactly once', () => {
+  // The claim is what makes approval single-use. Without it a double click, a
+  // retry, or a replayed request each submits the same destructive call again,
+  // and the later resume fails after the erasure has already run.
+  const run = pausedRun('case-a', HASH_A);
+  const args = { case_id: 'case-a', plan_hash: HASH_A };
+
+  const claimed = claimApproval(run, args);
+  assert.deepEqual(claimed.tool_call_ids, ['call-1']);
+
+  assert.throws(() => claimApproval(run, args), /already been submitted/);
+});
+
+test('a claimed approval is no longer offered as a paused run', () => {
+  const run = pausedRun('case-a', HASH_A);
+  claimApproval(run, { case_id: 'case-a', plan_hash: HASH_A });
+  assert.equal(pausedRunFor(run.run_id, 'case-a'), null);
+});
+
+test('a released claim can be approved again', () => {
+  // Releasing is for the path where the approval could not be recorded and no
+  // execution started; the operator must be able to retry.
+  const run = pausedRun('case-a', HASH_A);
+  const args = { case_id: 'case-a', plan_hash: HASH_A };
+
+  const claimed = claimApproval(run, args);
+  releaseApproval(run, claimed);
+
+  assert.equal(pausedRunFor(run.run_id, 'case-a')?.run_id, run.run_id);
+  assert.doesNotThrow(() => claimApproval(run, args));
+});
+
+test('a stale or wrong-case run is refused before it can be claimed', () => {
+  const stale = pausedRun('case-a', HASH_A);
+  assert.throws(() => claimApproval(stale, { case_id: 'case-a', plan_hash: HASH_B }), /older plan/);
+  // The failed claim must not have consumed the request.
+  assert.ok(pausedRunFor(stale.run_id, 'case-a'));
+
+  const other = pausedRun('case-a', HASH_A);
+  assert.throws(() => claimApproval(other, { case_id: 'case-b', plan_hash: HASH_A }), /different case/);
+  assert.ok(pausedRunFor(other.run_id, 'case-a'));
 });
 
 test('an unknown or absent run id is not returned', () => {

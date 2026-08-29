@@ -185,6 +185,36 @@ export function setApprovalRequest(runId: string, request: ApprovalRequest): voi
 }
 
 /**
+ * Take the pending approval request, once.
+ *
+ * An approval authorises one irreversible execution, so it has to be
+ * single-use: without this, repeated or concurrent POSTs each pass the guards
+ * and submit the same tool call again, producing competing resume turns where
+ * a later one fails after the erasure has already run - and the UI follows the
+ * failure.
+ *
+ * The read and the clear happen with no await between them, so on Node's
+ * single thread no second request can observe the request still present. That
+ * is what makes this a claim rather than a check.
+ */
+export function claimApprovalRequest(runId: string): ApprovalRequest | null {
+  const run = runs.get(runId);
+  const request = run?.approval_request;
+  if (!run || !request) return null;
+  delete run.approval_request;
+  flush(run);
+  return request;
+}
+
+/** Put a claim back when the work it was claimed for could not be started. */
+export function restoreApprovalRequest(runId: string, request: ApprovalRequest): void {
+  const run = runs.get(runId);
+  if (!run || run.approval_request) return;
+  run.approval_request = request;
+  flush(run);
+}
+
+/**
  * Store a rehearsal transcript as it happens.
  *
  * On the harness this is the only place the transcript exists - it is a tool

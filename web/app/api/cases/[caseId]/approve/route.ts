@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { caseGet, recordApproval } from '@/lib/mcp';
-import { approveRun, assertApprovable, pausedRunFor } from '@/lib/engine';
+import { approveRun, claimApproval, pausedRunFor, releaseApproval } from '@/lib/engine';
+import type { ApprovalRequest } from '@/lib/run-store';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -66,7 +67,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ cas
   // and approveRun picks the right route.
   const paused = pausedRunFor(runId, caseId);
 
+  let claimed: ApprovalRequest | null = null;
   try {
+    // Claim first. The claim validates that this run belongs to this case and
+    // is holding the plan being approved, and takes sole ownership of the
+    // pending call so a second POST cannot submit it again. All of that has to
+    // happen before anything is written, because an approval is a record of a
+    // person consenting to one specific plan.
+    if (paused) claimed = claimApproval(paused, { case_id: caseId, plan_hash: planHash });
+
     // The agent is paused holding a formed call to the destructive tool, and
     // resuming runs it immediately - so the operator's identity has to be on
     // record first. It is known only here, and Oubliette treats the stored
@@ -75,17 +84,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ cas
     //
     // The deterministic engine records its own approval as part of executing,
     // so doing it here too would write the same approval twice.
-    if (paused) {
-      // Check before writing anything: an approval is a record of a person
-      // consenting to one specific plan, so it must not be created for a run
-      // that is about to execute a different one.
-      assertApprovable(paused, { case_id: caseId, plan_hash: planHash });
-      await recordApproval(caseId, planHash, approvedBy);
-    }
+    if (paused) await recordApproval(caseId, planHash, approvedBy);
 
-    const run = approveRun(paused, { case_id: caseId, plan_hash: planHash, approved_by: approvedBy });
+    const run = approveRun(paused, claimed, { case_id: caseId, plan_hash: planHash, approved_by: approvedBy });
     return NextResponse.json({ run_id: run.run_id }, { status: 202 });
   } catch (error) {
+    // Nothing was started, so hand the claim back and let the operator retry.
+    if (paused && claimed) releaseApproval(paused, claimed);
     return NextResponse.json(
       { error: error instanceof Error ? error.message : 'failed to approve' },
       { status: 409 },
