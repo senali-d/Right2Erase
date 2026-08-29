@@ -30,7 +30,7 @@ export default function Home() {
       if (response.ok) setCases(payload.cases ?? []);
       else setError(payload.error ?? 'failed to load cases');
     } catch {
-      setError('cannot reach the Oubliette MCP server - is it running on :4014?');
+      setError('cannot reach the Right2Erase MCP server - is it running on :4014?');
     }
   }
 
@@ -68,7 +68,7 @@ export default function Home() {
   return (
     <main className="mx-auto max-w-4xl px-6 py-14">
       <header>
-        <h1 className="text-lg font-semibold tracking-[0.2em] text-ink">OUBLIETTE</h1>
+        <h1 className="text-lg font-semibold tracking-[0.2em] text-ink">RIGHT2ERASE</h1>
         <p className="mt-1.5 text-ink-dim">Data erasure control center</p>
       </header>
 

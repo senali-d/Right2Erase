@@ -69,16 +69,73 @@ function pendingPlanHash(
     const source = events.get(ref.sourceEventId);
     if (source?.type !== 'model.message') continue;
     const call = (source as TrueForgeApi.ModelMessageEvent).toolCalls?.find((entry) => entry.id === ref.id);
-    if (call?.toolInfo?.name !== 'oubliette_execute_erasure') continue;
-    try {
-      const args = JSON.parse(call.function?.arguments || '{}') as { plan_hash?: unknown };
-      if (typeof args.plan_hash === 'string') return args.plan_hash;
-    } catch {
-      // Unparseable arguments leave the hash unknown; the caller treats that
-      // as "cannot verify" rather than "verified".
-    }
+    // Matched through toolNameOf, not toolInfo.name: a dispatched call reports
+    // the wrapper, so comparing the raw name would never recognise the one
+    // tool this gate exists for, and every approval would arrive with no hash
+    // to check the operator's against.
+    if (!call || toolNameOf(call) !== 'oubliette_execute_erasure') continue;
+    const args = callArguments(call) as { plan_hash?: unknown };
+    if (typeof args.plan_hash === 'string') return args.plan_hash;
   }
   return undefined;
+}
+
+/** The wrapper TrueForge dispatches a lazily-loaded MCP tool through. */
+const DISPATCH_TOOL = 'call_tool';
+
+/**
+ * Which tool a call actually reached.
+ *
+ * When an agent's MCP servers are not preloaded, TrueForge does not expose
+ * their tools to the model directly. It offers one generic `call_tool` and
+ * names the real tool in the arguments, so `toolInfo` reports the wrapper for
+ * every single call. Reading that name alone makes an entire investigation
+ * look like one long undifferentiated phase: the rail never leaves Discovery,
+ * `case_create` is never seen so the run never learns its case id and the UI
+ * never leaves the interstitial page, and the rehearsal transcript is dropped
+ * because `db_rehearse_deletion_plan` never appears to have run.
+ *
+ * Only `call_tool` is unwrapped. `get_tool_info` carries a `tool_name` too,
+ * but it is the model reading a schema rather than invoking anything - and
+ * since phases only ever move forward, treating a lookup as a call would jump
+ * the rail to Planning the moment the agent so much as inspected plan_create.
+ */
+function toolNameOf(call: TrueForgeApi.ToolCall): string | undefined {
+  const info = call.toolInfo;
+  // A directly exposed MCP tool already names itself.
+  if (info?.type === 'mcp') return info.name;
+  if (info?.name !== DISPATCH_TOOL) return info?.name;
+
+  const wrapped = parseArguments(call)?.tool_name;
+  // A half-streamed arguments string is not yet parseable. Returning the
+  // wrapper keeps the call counted; the next merge re-harvests it, and
+  // recording is keyed by id so the real name wins once it arrives.
+  return typeof wrapped === 'string' && wrapped ? wrapped : info.name;
+}
+
+/** The raw arguments object, or undefined while it is still streaming. */
+function parseArguments(call: TrueForgeApi.ToolCall): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(call.function?.arguments || '{}');
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The arguments the tool itself received.
+ *
+ * A dispatched call carries the wrapper's own arguments - which server, which
+ * tool - and nests the real ones under `input`. Reading the top level of that
+ * would find no plan_hash and silently report the approval as unverifiable.
+ */
+function callArguments(call: TrueForgeApi.ToolCall): Record<string, unknown> {
+  const args = parseArguments(call);
+  if (!args) return {};
+  if (call.toolInfo?.name !== DISPATCH_TOOL) return args;
+  const input = args.input;
+  return input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
 }
 
 /**
@@ -113,10 +170,19 @@ async function consume(
    */
   const harvestToolCalls = (message: TrueForgeApi.ModelMessageEvent) => {
     for (const call of message.toolCalls ?? []) {
-      const name = call.toolInfo?.name;
-      if (!name || toolNames.has(call.id)) continue;
-      toolNames.set(call.id, name);
-      startedAt.set(call.id, Date.now());
+      const name = toolNameOf(call);
+      if (!name) continue;
+      const known = toolNames.get(call.id);
+      // The real name lives in a JSON arguments string that arrives in deltas,
+      // so the first sighting of a dispatched call can only report the
+      // wrapper. Let a later merge refine that, but never let the wrapper
+      // overwrite a name already resolved.
+      if (!known || (known === DISPATCH_TOOL && name !== DISPATCH_TOOL)) {
+        toolNames.set(call.id, name);
+      }
+      // Kept from the first sighting: the elapsed time being measured is the
+      // tool's, not the time the model spent streaming its arguments.
+      if (!startedAt.has(call.id)) startedAt.set(call.id, Date.now());
     }
   };
 

@@ -18,8 +18,28 @@ import { callTool, skipUnless } from './test-client.js';
 const DB_URL = process.env.SHOPKART_DB_MCP_URL || 'http://127.0.0.1:4012/mcp';
 
 const AGENT = 'adapter-invariant-tests';
-const skipDb = await skipUnless(DB_URL, 'shopkart-db');
-const call = (url, name, args) => callTool(url, AGENT, name, args);
+const skipDb = await skipUnless(DB_URL, 'shopkart-db', 'database');
+const call = (url, name, args) => callTool(url, AGENT, 'database', name, args);
+
+/**
+ * The subject's account id, asked for rather than assumed.
+ *
+ * It used to be written here as the literal 201, which is only true when the
+ * fixture seeds exactly 200 background accounts before him - so these tests
+ * silently failed for anyone running a different SEED_ACCOUNTS or SEED_PROFILE,
+ * on a fixture that was perfectly well formed. The address is the stable
+ * identity; the id is an implementation detail of how many rows came first.
+ */
+let subjectId;
+async function subjectAccountId() {
+  if (subjectId === undefined) {
+    const [account] = await call(DB_URL, 'db_find_accounts', { email: 'ravi.sharma@example.com' });
+    assert.ok(account,
+      'the fixture needs the subject; a completed erasure run removes him, so re-seed with ./scripts/demo-reset.sh');
+    subjectId = account.id;
+  }
+  return subjectId;
+}
 
 test('db_find_accounts refuses an email that resolves to more than one account', { skip: skipDb }, async () => {
   // The seeded fixture has no colliding address, so create the collision the
@@ -63,7 +83,7 @@ test('db_find_accounts still returns several accounts for a shared display name'
 });
 
 test('db_get_account_emails returns every address in one call, with no paging left to the caller', { skip: skipDb }, async () => {
-  const response = await call(DB_URL, 'db_get_account_emails', { account_id: 201 });
+  const response = await call(DB_URL, 'db_get_account_emails', { account_id: await subjectAccountId() });
   assert.equal(response.truncated, false);
   assert.equal(response.next_cursor, null);
   const addresses = response.rows.map((row) => row.email);
@@ -102,8 +122,9 @@ test('db_search_event_log batches internally and dedupes IP-matched rows', { ski
 });
 
 test('db_search_uploads returns linked and orphaned rows from a single call', { skip: skipDb }, async () => {
-  const rows = await call(DB_URL, 'db_search_uploads', { account_id: 201, object_prefix: 'uploads/acct_201/' });
-  assert.ok(rows.some((row) => row.account_id === 201), 'linked upload missing');
+  const id = await subjectAccountId();
+  const rows = await call(DB_URL, 'db_search_uploads', { account_id: id, object_prefix: `uploads/acct_${id}/` });
+  assert.ok(rows.some((row) => row.account_id === id), 'linked upload missing');
   assert.ok(rows.some((row) => row.account_id === null), 'orphaned upload missing');
 });
 

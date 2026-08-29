@@ -14,8 +14,8 @@ import { callTool, skipUnless } from '../mcp/test-client.js';
 
 const URL_ = process.env.OUBLIETTE_MCP_URL || 'http://127.0.0.1:4014/mcp';
 
-const skip = await skipUnless(URL_, 'oubliette');
-const call = (name, args) => callTool(URL_, 'oubliette-invariant-tests', name, args);
+const skip = await skipUnless(URL_, 'oubliette', 'oubliette');
+const call = (name, args) => callTool(URL_, 'oubliette-invariant-tests', 'oubliette', name, args);
 
 async function newCase() {
   const created = await call('case_create', { subject_email: `agent-test-${Date.now()}@example.com` });

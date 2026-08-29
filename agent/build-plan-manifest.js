@@ -35,6 +35,28 @@ function parseResult(result) {
   try { return JSON.parse(text); } catch { return text; }
 }
 
+/**
+ * The source row behind a finding, whichever way the recorder shaped it.
+ *
+ * finding_add documents metadata as "the source row", and an agent that reads
+ * that literally sends the row's own columns. The deterministic script instead
+ * nests it as { row }, and everything downstream was written against that.
+ * Both are reasonable readings of the contract, and the recorder here is a
+ * language model, so tolerating either is the only version of this that stays
+ * correct: the alternative is a manifest that silently miscounts because a
+ * model chose the wrong nesting, which is exactly the failure a ground-truth
+ * check exists to catch.
+ *
+ * Wrapped form wins when present, so a metadata object that happens to carry
+ * its own `row` column is not mistaken for the wrapper.
+ */
+function sourceRow(finding) {
+  const metadata = finding?.metadata;
+  if (!metadata || typeof metadata !== 'object') return {};
+  const nested = metadata.row;
+  return nested && typeof nested === 'object' ? nested : metadata;
+}
+
 export function buildManifest(findings) {
   const delete_ = {};
   const bump = (key) => { delete_[key] = (delete_[key] || 0) + 1; };
@@ -43,7 +65,7 @@ export function buildManifest(findings) {
   for (const finding of findings) {
     if (finding.disposition === 'retain') {
       if (finding.record_type !== 'retained_refund') continue;
-      const row = finding.metadata?.row || {};
+      const row = sourceRow(finding);
       withhold.push({
         table: 'retained_refunds',
         id: row.id ?? finding.record_id,
@@ -56,7 +78,11 @@ export function buildManifest(findings) {
     if (finding.disposition !== 'erase') continue;
 
     if (finding.record_type === 'upload') {
-      const linked = finding.metadata?.row?.account_id != null;
+      // An upload with no account_id is the orphan case 4 plants: reachable
+      // only by its key path. Reading that off the stored row is what tells
+      // the two apart, so a finding whose row cannot be located counts as
+      // orphaned and shows up as a mismatch rather than passing silently.
+      const linked = sourceRow(finding).account_id != null;
       bump(linked ? 'uploads_linked' : 'uploads_orphaned');
       continue;
     }

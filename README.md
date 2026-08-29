@@ -81,6 +81,22 @@ is the terminal equivalent of that screen.
 Other useful scripts: `npm test` runs the full suite, `npm run web:build`
 produces a production build, and `npm run reset` re-seeds ShopKart only.
 
+### Fixture size
+
+`SEED_PROFILE=small npm run seed` builds a 3-account ShopKart whose subject owns
+about 25 records instead of 440. The default, `full`, is 202 accounts and is what
+the rest of this file describes.
+
+Both profiles seed the same five cases, so the safety story is identical either
+way. The difference is cost: every record the subject owns becomes a finding the
+agent has to read, stage, rehearse and delete, so `small` is much cheaper to
+iterate against — a ~25-action plan rather than a 444-action one.
+
+Shrinking the *background* alone does almost nothing, which is worth knowing
+before reaching for `SEED_ACCOUNTS`: at 20 background accounts the plan is still
+exactly 444 deletions, because none of the subject's data comes from that loop.
+See `fixture/README.md` for the full comparison.
+
 ## Deploying
 
 The whole demo ships as **one container**: Postgres, MinIO, the billing API, the
@@ -97,7 +113,8 @@ docker run --rm -p 3000:3000 -e OPENAI_API_KEY=sk-... -v oubliette-state:/data o
 ```
 
 First boot runs `initdb` and seeds 200 ShopKart accounts, so give it a minute or
-two before the UI answers.
+two before the UI answers. Set `SEED_PROFILE=small` to seed 3 accounts instead —
+faster to boot, and far fewer findings for the model to work through.
 
 ### On Railway
 

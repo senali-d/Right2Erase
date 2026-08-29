@@ -16,7 +16,7 @@
     "up": "docker compose up -d --wait",
     "down": "docker compose down -v",
     "seed": "npm --workspace fixture run seed",
-    "truth": "node fixture/scripts/truth.js",
+    "truth": "node --env-file-if-exists=.env fixture/scripts/truth.js",
     "reset": "npm run down && npm run up && npm run seed",
     "mcp:billing": "node mcp/billing-server.js",
     "mcp:billing:http": "MCP_TRANSPORT=http MCP_PORT=4011 node mcp/billing-server.js",
@@ -27,7 +27,7 @@
     "mcp:oubliette": "node src/mcp-server.js",
     "mcp:oubliette:http": "MCP_TRANSPORT=http node src/mcp-server.js",
     "mcp:all": "node scripts/mcp-all.js",
-    "test": "node --test && npm --workspaces run test --if-present"
+    "test": "node --env-file-if-exists=.env --test && npm --workspaces run test --if-present"
   },
   "engines": {
     "node": ">=22.18"

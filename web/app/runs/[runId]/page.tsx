@@ -43,7 +43,7 @@ export default function RunPage({ params }: { params: Promise<{ runId: string }>
       <Link href="/" className="text-[11px] text-ink-faint hover:text-ink-dim">
         ← all cases
       </Link>
-      <h1 className="mt-4 text-lg font-semibold tracking-[0.2em] text-ink">OUBLIETTE</h1>
+      <h1 className="mt-4 text-lg font-semibold tracking-[0.2em] text-ink">RIGHT2ERASE</h1>
       <p className="mt-1.5 text-ink-dim">
         {run?.subject_email ? `Investigating ${run.subject_email}…` : 'Starting investigation…'}
       </p>

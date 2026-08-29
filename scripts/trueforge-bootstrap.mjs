@@ -18,13 +18,31 @@ import { pathToFileURL } from 'node:url';
 
 const BASE = process.env.TRUEFORGE_BASE_URL || 'http://localhost:8790';
 
+/**
+ * The bearer token for one server, matching how every other client here picks
+ * it: a per-server MCP_AUTH_TOKEN_<NAME> if one is issued, otherwise the shared
+ * MCP_AUTH_TOKEN. See agent/create-agent.js and web/lib/mcp.ts.
+ *
+ * TrueForge calls these servers itself rather than proxying through us, so if
+ * a token is configured it has to be handed over at registration. Without it
+ * the agent's own tool calls get 401s that never reach this script: the run
+ * simply lists tools, finds none it can use, and stops - reporting success
+ * having done nothing, which is the worst way for a credential problem to
+ * present.
+ */
+function authFor(name) {
+  const token = process.env[`MCP_AUTH_TOKEN_${name.toUpperCase()}`] || process.env.MCP_AUTH_TOKEN;
+  return token ? { auth: { type: 'header', headers: { authorization: `Bearer ${token}` } } } : {};
+}
+
 // The four adapters this project serves, named as the agent definition
-// references them. URLs mirror the ports in .env.example.
+// references them. URLs mirror the ports in .env.example. The env var each
+// token is read from is the adapter's own name, not its TrueForge label.
 const MCP_SERVERS = [
-  { name: 'shopkart-db', url: process.env.SHOPKART_DB_MCP_URL || 'http://127.0.0.1:4012/mcp', description: 'Read-only ShopKart Postgres discovery, sandbox snapshot export, and deletion rehearsal.' },
-  { name: 'shopkart-storage', url: process.env.SHOPKART_STORAGE_MCP_URL || 'http://127.0.0.1:4013/mcp', description: 'Read-only ShopKart MinIO object metadata. Never returns object content.' },
-  { name: 'shopkart-billing', url: process.env.SHOPKART_BILLING_MCP_URL || 'http://127.0.0.1:4011/mcp', description: 'Read-only billing customer and charge lookup, plus dry-run erasure preview.' },
-  { name: 'right-to-erase', url: process.env.OUBLIETTE_MCP_URL || 'http://127.0.0.1:4014/mcp', description: 'Oubliette case management: findings, immutable plans, approvals, and the sole destructive erasure tool.' },
+  { name: 'shopkart-db', url: process.env.SHOPKART_DB_MCP_URL || 'http://127.0.0.1:4012/mcp', description: 'Read-only ShopKart Postgres discovery, sandbox snapshot export, and deletion rehearsal.', ...authFor('database') },
+  { name: 'shopkart-storage', url: process.env.SHOPKART_STORAGE_MCP_URL || 'http://127.0.0.1:4013/mcp', description: 'Read-only ShopKart MinIO object metadata. Never returns object content.', ...authFor('storage') },
+  { name: 'shopkart-billing', url: process.env.SHOPKART_BILLING_MCP_URL || 'http://127.0.0.1:4011/mcp', description: 'Read-only billing customer and charge lookup, plus dry-run erasure preview.', ...authFor('billing') },
+  { name: 'right-to-erase', url: process.env.OUBLIETTE_MCP_URL || 'http://127.0.0.1:4014/mcp', description: 'Oubliette case management: findings, immutable plans, approvals, and the sole destructive erasure tool.', ...authFor('oubliette') },
 ];
 
 async function send(method, path, body) {

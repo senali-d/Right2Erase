@@ -84,7 +84,7 @@ export function ApprovalPanel({
           className="mt-1 w-full rounded border border-line-bright bg-ground px-3 py-2 text-ink outline-none focus:border-accent disabled:opacity-50"
         />
         <p className="mt-1 text-[10px] text-ink-faint">
-          Recorded on the approval and re-checked by Oubliette before execution.
+          Recorded on the approval and re-checked by Right2Erase before execution.
         </p>
       </div>
 

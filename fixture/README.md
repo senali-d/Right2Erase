@@ -27,6 +27,29 @@ between demo takes so the numbers are identical each time.
 Seeding is deterministic (`SEED = 4217`). Same command, same database, same
 row counts on your machine and on a judge's.
 
+### Two sizes
+
+`SEED_PROFILE` picks how much fixture to build. Every number in this file
+describes `full`, the default.
+
+| | `full` | `small` |
+| --- | ---: | ---: |
+| Accounts | 202 | 3 |
+| Subject's records | ~440 | ~25 |
+| Subject's log lines | 400 | 10 |
+
+Both build the same five cases — they are structural traps, not statistical
+ones, so shrinking the fixture does not soften any of them. `full` is the demo:
+five needles found among 200 accounts is the story. `small` exists because every
+record the subject owns becomes a finding the agent has to read, stage, rehearse
+and delete, so a 25-record subject is far cheaper to iterate against.
+
+Note that the two are separately deterministic rather than nested. `faker` is
+seeded once for the whole run, so changing the background count shifts every
+draw after it — `small` is not a subset of `full`.
+
+`SEED_ACCOUNTS` still overrides the account count on its own, as before.
+
 ## The subject
 
 `ravi.sharma@example.com` — 12 orders, 3 support tickets, 2 objects, a saved

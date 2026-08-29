@@ -50,7 +50,7 @@ const finding = {
   record_type: z.enum(RECORD_TYPES).describe('What kind of record this is, singular: account, account_email, order, order_item, refund, retained_refund, support_ticket, upload, event (postgres); object (minio); customer (billing).'),
   record_id: z.union([z.string(), z.number()]).describe('The record primary key, or the object key for a minio object.'),
   locator: z.string().max(1000).optional().describe('For minio objects, the full object key.'),
-  metadata: z.record(z.any()).optional().describe('The source row, kept for the audit trail.'),
+  metadata: z.record(z.any()).optional().describe('The source row, kept for the audit trail. Pass the row as you received it - its own columns at the top level. A row nested under a "row" key is also accepted, and for an upload the account_id column is what separates a linked object from an orphaned one, so keep it.'),
   disposition: z.enum(['erase', 'retain', 'review']).optional().describe('erase by default. retained_refund records are always recorded as retain regardless of what is passed.'),
 };
 

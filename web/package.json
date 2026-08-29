@@ -6,7 +6,7 @@
     "dev": "next dev -p 3000 -H 127.0.0.1",
     "build": "next build",
     "start": "next start -p ${PORT:-3000} -H ${HOST:-127.0.0.1}",
-    "test": "node --test"
+    "test": "node --env-file-if-exists=../.env --test"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
