@@ -43,7 +43,7 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
       if (response.ok) setView(payload.view);
       else setError(payload.error ?? 'failed to load case');
     } catch {
-      setError('cannot reach the Oubliette MCP server - is it running on :4014?');
+      setError('cannot reach the Right2Erase MCP server - is it running on :4014?');
     }
   }, [caseId]);
 
@@ -128,7 +128,7 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
         <Link href="/" className="text-[11px] text-ink-faint hover:text-ink-dim">
           ← all cases
         </Link>
-        <h1 className="mt-4 text-sm font-semibold tracking-[0.2em] text-ink">OUBLIETTE</h1>
+        <h1 className="mt-4 text-sm font-semibold tracking-[0.2em] text-ink">RIGHT2ERASE</h1>
         <div className="mt-6">
           <StepRail
             steps={view.steps}
