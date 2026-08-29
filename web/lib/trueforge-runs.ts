@@ -52,6 +52,36 @@ function parseContent(content: unknown): unknown {
 type ToolResponseEvent = { toolCallId?: string; isError?: boolean; content?: unknown };
 
 /**
+ * The plan hash the paused execution call is about to act on.
+ *
+ * The approval event references its calls by id; the arguments live on the
+ * `model.message` that announced them, which is why the accumulated events are
+ * needed to find it. Reading the hash from the call itself - rather than
+ * trusting whatever the browser later submits - is what makes it possible to
+ * tell that the operator is approving a different plan than the one waiting to
+ * run.
+ */
+function pendingPlanHash(
+  events: Map<string, TrueForgeApi.TurnStreamingEvent>,
+  pending: TrueForgeApi.ToolApprovalRequiredEvent,
+): string | undefined {
+  for (const ref of pending.toolCalls) {
+    const source = events.get(ref.sourceEventId);
+    if (source?.type !== 'model.message') continue;
+    const call = (source as TrueForgeApi.ModelMessageEvent).toolCalls?.find((entry) => entry.id === ref.id);
+    if (call?.toolInfo?.name !== 'oubliette_execute_erasure') continue;
+    try {
+      const args = JSON.parse(call.function?.arguments || '{}') as { plan_hash?: unknown };
+      if (typeof args.plan_hash === 'string') return args.plan_hash;
+    } catch {
+      // Unparseable arguments leave the hash unknown; the caller treats that
+      // as "cannot verify" rather than "verified".
+    }
+  }
+  return undefined;
+}
+
+/**
  * Consume one turn's event stream into a run record.
  *
  * Tool calls are announced on `model.message`, but only after their deltas are
@@ -137,6 +167,7 @@ async function consume(
       setApprovalRequest(runId, {
         thread_id: pending.threadId,
         tool_call_ids: pending.toolCalls.map((ref) => ref.id),
+        plan_hash: pendingPlanHash(events, pending),
       });
     }
   }

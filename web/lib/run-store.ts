@@ -59,6 +59,20 @@ export type RehearsalEntry = {
 export type ApprovalRequest = {
   thread_id: string;
   tool_call_ids: string[];
+  /**
+   * The plan hash the paused call will execute, read from its arguments.
+   *
+   * A turn can sit paused while the case moves on: a new finding bumps the
+   * revision and a newer plan gets built. The operator would then be shown -
+   * and approve - the newer plan, while the call waiting to resume still
+   * carries the older hash. Holding the hash here is what lets the approval
+   * endpoint notice that mismatch and refuse, instead of recording an approval
+   * for one plan and resuming the execution of another.
+   *
+   * Absent if the pending call's arguments could not be read; Oubliette still
+   * refuses a stale plan at execution time either way.
+   */
+  plan_hash?: string;
 };
 
 export type Run = {

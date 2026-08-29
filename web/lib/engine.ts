@@ -30,6 +30,35 @@ export function startPrepareRun(subjectEmail: string, engine: EngineName): Run {
 }
 
 /**
+ * Refuse a paused run that does not match what is being approved.
+ *
+ * Separate from approveRun so the caller can check *before* recording the
+ * approval. An approval is an audit record of a person consenting to one
+ * specific plan; writing one for a plan that is not the one about to run is
+ * worse than refusing outright.
+ */
+export function assertApprovable(paused: Run, args: { case_id: string; plan_hash: string }): void {
+  // The run id arrives from the client, so it is not trusted to identify which
+  // case is being approved. Resuming a paused run from a different case would
+  // validate this case's plan and then execute that one's erasure - the
+  // approval a human gave and the deletion that happens have to be the same
+  // case.
+  if (paused.case_id !== args.case_id) {
+    throw new Error('that paused run belongs to a different case');
+  }
+  // The turn may have been waiting while the case moved on and a newer plan was
+  // built. Approving would then consent to the plan on screen while resuming a
+  // call carrying the older one. Oubliette refuses that at execution time, but
+  // only after the operator has been told their approval succeeded.
+  const pendingHash = paused.approval_request?.plan_hash;
+  if (pendingHash && pendingHash !== args.plan_hash) {
+    throw new Error(
+      'the paused run is executing an older plan than the one being approved; re-open the case and review the current plan',
+    );
+  }
+}
+
+/**
  * Approve a plan.
  *
  * The two engines reach the same destructive tool by different routes. The
@@ -43,14 +72,7 @@ export function approveRun(
   args: { case_id: string; plan_hash: string; approved_by: string },
 ): Run {
   if (paused?.session_id && paused.approval_request) {
-    // The run id arrives from the client, so it is not trusted to identify
-    // which case is being approved. Resuming a paused run from a different
-    // case would validate this case's plan and then execute that one's
-    // erasure - the approval a human gave and the deletion that happens have
-    // to be the same case.
-    if (paused.case_id !== args.case_id) {
-      throw new Error('that paused run belongs to a different case');
-    }
+    assertApprovable(paused, args);
     return agentic.resolveApproval(paused, { allow: true, approvedBy: args.approved_by });
   }
   return deterministic.startExecuteRun(args);

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { caseGet, recordApproval } from '@/lib/mcp';
-import { approveRun, pausedRunFor } from '@/lib/engine';
+import { approveRun, assertApprovable, pausedRunFor } from '@/lib/engine';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -75,7 +75,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ cas
     //
     // The deterministic engine records its own approval as part of executing,
     // so doing it here too would write the same approval twice.
-    if (paused) await recordApproval(caseId, planHash, approvedBy);
+    if (paused) {
+      // Check before writing anything: an approval is a record of a person
+      // consenting to one specific plan, so it must not be created for a run
+      // that is about to execute a different one.
+      assertApprovable(paused, { case_id: caseId, plan_hash: planHash });
+      await recordApproval(caseId, planHash, approvedBy);
+    }
 
     const run = approveRun(paused, { case_id: caseId, plan_hash: planHash, approved_by: approvedBy });
     return NextResponse.json({ run_id: run.run_id }, { status: 202 });
