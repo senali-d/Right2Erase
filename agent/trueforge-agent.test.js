@@ -428,3 +428,21 @@ test('prepare() deletes the sandbox snapshot even when rehearsal fails', async (
 
   assert.deepEqual(deleteCalls, ['snap-42']);
 });
+
+test('a subject with no account and no billing customer is refused before a case is created', async () => {
+  const calls = [];
+  const agent = createTrueForgeAgent({
+    callTool: async (tool) => {
+      calls.push(tool);
+      return { rows: [], results: [] };
+    },
+  });
+
+  await assert.rejects(
+    agent.prepare({ subject_email: 'nobody@nowhere.test' }),
+    /no ShopKart data found for nobody@nowhere.test/,
+  );
+  // The refusal must land before case_create: Oubliette cases are permanent
+  // audit records, so a typo must not leave an empty one behind forever.
+  assert.deepEqual(calls, ['db_find_accounts', 'billing_find_customer']);
+});

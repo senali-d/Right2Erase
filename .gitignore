@@ -2,5 +2,12 @@
 fixture/node_modules
 node_modules
 fixture/.DS_Store
-.DS_Store
 .oubliette
+web/.next
+web/next-env.d.ts
+web/tsconfig.tsbuildinfo
+
+# Real secrets. .env.example is the committed template; .env is not.
+.env
+.env.local
+.env.*.local

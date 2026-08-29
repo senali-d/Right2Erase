@@ -23,10 +23,16 @@ function positiveInteger(value, fallback) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 // account_emails has no schema-level cap on historical addresses per account,
-// unlike db_search_event_log's 100-email input limit. Without a query-side
-// bound here, a caller partitioning the full list into event-log batches has
-// no upper limit on how many batches it ends up issuing.
+// so this bounds how large a single account's address list may be before
+// db_get_account_emails refuses rather than returning part of it.
 const maxAccountEmails = positiveInteger(process.env.MCP_DB_MAX_ACCOUNT_EMAILS || process.env.MCP_MAX_RESULTS, 500);
+// How many addresses go into one event-log query, and the ceiling on how many
+// a single db_search_event_log call accepts. The batch size bounds each
+// query's parameter list; the maximum bounds how many sequential queries one
+// call can issue. Batching is the server's job, not the caller's - see
+// db_search_event_log.
+const eventLogEmailBatchSize = positiveInteger(process.env.MCP_DB_EVENT_LOG_BATCH, 100);
+const maxEventLogEmails = positiveInteger(process.env.MCP_DB_MAX_EVENT_LOG_EMAILS, 5000);
 // Bounds one db_stage_deletion_actions call's request size, not the logical
 // size of a rehearsal: a caller stages an arbitrarily large discovered action
 // set across as many chunked calls as it takes, each capped at this size, and
@@ -78,18 +84,48 @@ function createServer() {
           OR ($2::text IS NOT NULL AND a.full_name = $2)
        ORDER BY id`, [email ?? null, full_name ?? null],
     );
+    // account_emails has no cross-account uniqueness constraint, so a
+    // historical address can legitimately have been recycled onto a different
+    // person's account. One email resolving to several accounts is an identity
+    // collision, never a set of deletion targets - silently picking one, or
+    // taking all of them, risks erasing an unrelated person. Refusing here
+    // rather than describing the hazard in the tool description means a caller
+    // cannot proceed past it by misreading the rows, and the refusal lands
+    // before any case exists to be left orphaned.
+    //
+    // Scoped to email matches on purpose: several accounts sharing a display
+    // name is the expected shape, and is why name alone must never select a
+    // target.
+    if (email) {
+      const byEmail = rows.filter((row) => row.matched_via !== 'full_name');
+      const distinct = [...new Set(byEmail.map((row) => row.id))];
+      if (distinct.length > 1) {
+        throw new Error(`ambiguous identity for ${email}: matches ${distinct.length} distinct accounts [${
+          byEmail.map((row) => `account ${row.id} (${row.matched_via})`).join(', ')
+        }]; resolve the collision manually before opening a case`);
+      }
+    }
     return result(rows);
   });
-  tool('db_get_account_emails', `List current and historical email addresses for an account, one page of up to ${maxAccountEmails} rows at a time ordered by id. If truncated is true, call again with cursor set to next_cursor to fetch the next page; loop until truncated is false to see every address.`, {
+  // Returns every address in one call rather than a page the caller must loop.
+  // A missed historical address means an incomplete event-log search and a
+  // subject left partly discoverable, and "remember to keep paging" is exactly
+  // the kind of obligation a caller can drop. The cap is kept as a refusal
+  // threshold, matching storage: an oversized account fails loudly instead of
+  // silently handing back the first page. `cursor`, `truncated`, and
+  // `next_cursor` remain in the contract so existing paging callers still
+  // terminate correctly on the first response.
+  tool('db_get_account_emails', 'List every current and historical email address for an account, ordered by id. The result is never partial - an account with more addresses than the server limit fails rather than returning a subset, so no paging loop is required.', {
     account_id: z.coerce.number().int().positive(), cursor: z.coerce.number().int().nonnegative().optional(),
   }, async ({ account_id, cursor }) => {
     const { rows } = await pool.query(
       'SELECT id, account_id, email, is_primary, valid_from, valid_until FROM account_emails WHERE account_id=$1 AND id > $2 ORDER BY id LIMIT $3',
       [account_id, cursor ?? 0, maxAccountEmails + 1],
     );
-    const truncated = rows.length > maxAccountEmails;
-    const page = truncated ? rows.slice(0, maxAccountEmails) : rows;
-    return result({ rows: page, truncated, limit: maxAccountEmails, next_cursor: truncated ? page[page.length - 1].id : null });
+    if (rows.length > maxAccountEmails) {
+      throw new Error(`account ${account_id} has more than ${maxAccountEmails} email addresses; refusing to return a partial set that would plan an incomplete erasure. Raise MCP_DB_MAX_ACCOUNT_EMAILS.`);
+    }
+    return result({ rows, truncated: false, limit: maxAccountEmails, next_cursor: null });
   });
   tool('db_list_orders', 'List all orders belonging to one account.', { account_id: z.coerce.number().int().positive() }, async ({ account_id }) => {
     const { rows } = await pool.query('SELECT id, account_id, order_number, total_cents, status, ship_address, created_at FROM orders WHERE account_id=$1 ORDER BY id', [account_id]);
@@ -111,7 +147,11 @@ function createServer() {
     const { rows } = await pool.query('SELECT id, account_id, subject, body, status, created_at FROM support_tickets WHERE account_id=$1 ORDER BY id', [account_id]);
     return result(rows);
   });
-  tool('db_search_uploads', 'Find upload index records by account id, or recover orphaned records (account_id IS NULL) by their object-key prefix.', {
+  // Pass both arguments together: the query ORs the two branches, so one call
+  // returns the account's linked uploads and the orphaned rows recoverable by
+  // its key prefix as a single deduplicated set. Two separate calls merged by
+  // the caller produce the same answer only if the caller merges correctly.
+  tool('db_search_uploads', 'Find upload index records for an account. Pass account_id and object_prefix (uploads/acct_<id>/) together to get linked uploads plus orphaned records (account_id IS NULL) recoverable by key prefix in one result - orphaned rows have no foreign key back to the account and are missed by an account_id lookup alone.', {
     account_id: z.coerce.number().int().positive().optional(), object_prefix: z.string().min(1).max(300).optional(),
   }, async ({ account_id, object_prefix }) => {
     if (account_id == null && !object_prefix) throw new Error('account_id or object_prefix is required');
@@ -129,16 +169,36 @@ function createServer() {
     );
     return result(rows);
   });
-  tool('db_search_event_log', 'Search request logs by any known email address and/or IP address.', {
-    emails: z.array(z.string().email()).max(100).optional(), ip_address: z.string().ip().optional(),
+  // Accepts the subject's complete address list and batches internally, rather
+  // than capping the input at eventLogEmailBatchSize and leaving the caller to
+  // partition it. A caller that forgets to batch, or stops after the first
+  // batch, loses event-log coverage for every address past the cap - silently,
+  // because a short result looks exactly like a complete one. Batches run
+  // sequentially: firing them concurrently would fan out an unbounded number
+  // of simultaneous queries against a small shared pool.
+  tool('db_search_event_log', 'Search request logs by any known email addresses and/or IP address. Pass every address the subject is known by in one call - the server batches internally, so no client-side partitioning is required.', {
+    emails: z.array(z.string().email()).max(maxEventLogEmails).optional(), ip_address: z.string().ip().optional(),
   }, async ({ emails, ip_address }) => {
     if ((!emails || emails.length === 0) && !ip_address) throw new Error('emails or ip_address is required');
-    const { rows } = await pool.query(
-      `SELECT id, ts, email, ip_address, method, path, status_code, user_agent FROM event_log
-       WHERE ($1::text[] IS NOT NULL AND email = ANY($1::text[])) OR ($2::inet IS NOT NULL AND ip_address=$2) ORDER BY ts, id`,
-      [emails?.length ? emails : null, ip_address ?? null],
-    );
-    return result(rows);
+    const batches = [];
+    for (let i = 0; i < (emails?.length ?? 0); i += eventLogEmailBatchSize) {
+      batches.push(emails.slice(i, i + eventLogEmailBatchSize));
+    }
+    if (batches.length === 0) batches.push(null);
+
+    // The IP predicate is OR'd against the email predicate, so applying it to
+    // every batch would re-return the same IP-matched rows each time. Scope it
+    // to the first batch and dedupe by row id regardless.
+    const byId = new Map();
+    for (const [index, batch] of batches.entries()) {
+      const { rows } = await pool.query(
+        `SELECT id, ts, email, ip_address, method, path, status_code, user_agent FROM event_log
+         WHERE ($1::text[] IS NOT NULL AND email = ANY($1::text[])) OR ($2::inet IS NOT NULL AND ip_address=$2) ORDER BY ts, id`,
+        [batch?.length ? batch : null, index === 0 ? (ip_address ?? null) : null],
+      );
+      for (const row of rows) byId.set(row.id, row);
+    }
+    return result([...byId.values()]);
   });
   tool('db_export_subject_snapshot', `Export one account and every row reachable from it (historical emails, orders, order items, settled refunds, support tickets, uploads, event-log rows matched by known email/IP, and retained refunds referenced by its orders) into a self-contained sandbox SQLite snapshot. The snapshot enforces the same foreign-key dependencies as production PostgreSQL, so db_rehearse_deletion_plan can prove a deletion order safe before it ever touches real ShopKart data. Every call writes a fresh, uniquely named file, even for the same account, so concurrent exports never overwrite or delete each other. Returns snapshot_id: pass that opaque token, not snapshot_path, to db_stage_deletion_actions, db_rehearse_deletion_plan, and db_delete_snapshot - those tools accept only an id this server issued, never a path. A large discovered account's delete actions do not fit one db_stage_deletion_actions call (each is capped at ${maxRehearsalChunkSize}); call it repeatedly with successive chunks, in order, before calling db_rehearse_deletion_plan. Never call this with an ambiguous or unresolved account id.`, {
     account_id: z.coerce.number().int().positive(),

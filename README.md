@@ -2,27 +2,93 @@
 
 A safety-first, multi-system erasure demo. ShopKart is a deterministic fake company; an agent must discover personal data across Postgres, MinIO, logs, and billing, preserve a live refund, and execute only a reviewed plan.
 
-## Quick start
+## Running the app
 
-Requirements: Docker and Node.js 20+.
+Requirements: Docker and Node.js 22.18+ (`npm test` runs a TypeScript test file
+directly, which needs Node's built-in type stripping).
 
 ```bash
-./scripts/setup.sh
-# or: npm run setup
-npm run truth
+./scripts/setup.sh   # installs deps, starts Docker services, seeds ShopKart
+npm run dev          # starts the 4 MCP servers and the control center
 ```
 
-Reset between demo takes:
+Open <http://localhost:3000>, enter `ravi.sharma@example.com`, and press
+**Open erasure case**. The agent investigates all four systems, builds a plan,
+rehearses it in a throwaway sandbox, and stops at the approval gate. Nothing is
+deleted until you click **Approve & execute**.
+
+`setup.sh` is a one-time step. After that, `npm run dev` is all you need.
+
+### What each command starts
+
+`./scripts/setup.sh` runs `npm install`, brings up `docker-compose.yml`
+(Postgres `:5432`, MinIO `:9000`/`:9001`, the fake billing API `:4010`), and
+seeds the fixture data.
+
+`npm run dev` runs `scripts/dev-all.sh`, which starts five Node processes in one
+terminal and shuts all of them down together if any one exits:
+
+| Process | Port |
+| --- | --- |
+| Billing MCP adapter | 4011 |
+| ShopKart database MCP adapter | 4012 |
+| ShopKart storage MCP adapter | 4013 |
+| Oubliette case management MCP | 4014 |
+| Control center (Next.js) | 3000 |
+
+All four MCP servers bind to `127.0.0.1`, so no `MCP_AUTH_TOKEN` is needed
+locally. The browser never calls them directly; the Next.js server does.
+
+Stop everything with Ctrl-C in that terminal. The Docker services keep running;
+stop those with `npm run down`.
+
+### Between demo takes
 
 ```bash
+# stop npm run dev first: the Oubliette MCP server holds the case DB open,
+# so clearing it while that process is alive has no effect on it
 ./scripts/demo-reset.sh
+npm run dev
 ```
+
+This re-seeds ShopKart and clears Oubliette's cases, run mirrors, and cached
+ground-truth reports, so the same subject can be investigated again from
+scratch. Cases are permanent audit records with no delete path, which is why
+reopening one without a reset is refused.
+
+### Troubleshooting
+
+- **"cannot reach the Oubliette MCP server"** in the UI: an MCP server is not
+  running. `npm run dev` starts all four; check its output for a port conflict.
+- **"a case already exists for ..."**: expected. Open the existing case, or run
+  `./scripts/demo-reset.sh` for a clean slate.
+- **Port already in use**: something from a previous run survived. Check with
+  `lsof -i :3000` (or 4011-4014) and stop it.
+
+### Verifying the agent independently
+
+`npm run truth` prints the expected manifest, derived straight from Postgres by
+tooling the agent cannot reach. To score a real case against it:
+
+```bash
+node agent/build-plan-manifest.js <case_id> plan.json
+npm run truth -- --diff plan.json
+```
+
+The control center shows the same comparison in its verification panel, so this
+is the terminal equivalent of that screen.
+
+Other useful scripts: `npm test` runs the full suite, `npm run web:build`
+produces a production build, and `npm run reset` re-seeds ShopKart only.
 
 ## Repository
 
-- `fixture/` — ShopKart fake services, schema, seed data, and operator-only truth checker
-- `mcp/` — agent-facing MCP adapters for the fake services
-- `docs/` — architecture, capability map, and Phase 0 evidence
+- `fixture/` - ShopKart fake services, schema, seed data, and operator-only truth checker
+- `mcp/` - agent-facing MCP adapters for the fake services
+- `agent/` - both engines: the deterministic script (`trueforge-agent.js`, `create-agent.js`) and the TrueForge agent definition (`oubliette-agent.json`)
+- `src/` - Oubliette: the case store, plans, approvals, and the sole destructive path
+- `web/` - the Data Erasure Control Center (Next.js)
+- `docs/` - architecture, capability map, and Phase 0 evidence
 
 ## Qodo Code Review Evidence
 
@@ -67,7 +133,105 @@ The billing adapter remains separate at `http://127.0.0.1:4011/mcp` and exposes
 read-only discovery plus dry-run preview. Billing deletion is reached only
 through Oubliette's approved execution path.
 
-## TrueForge agent
+## Data Erasure Control Center
+
+`web/` is a Next.js UI over the same agent the CLI drives. It is one screen that
+tells one story: who the subject is, where their data lives, what will be
+deleted, what will not, whether the plan was actually tested, who authorized it,
+and what happened.
+
+The browser never talks to MCP. `mcp/http-transport.js` enforces an Origin
+allowlist and serves no CORS headers, so every MCP call goes through Next.js
+route handlers. The UI performs no deletion of its own, on either engine:
+Oubliette independently re-validates the canonical plan hash, the approving
+identity, and the case revision before any adapter runs.
+
+Live progress is derived from tool names, since neither engine emits phases of
+its own. On the agentic engine they come off the TrueForge event stream
+(`web/lib/trueforge-runs.ts`); on the deterministic one from an `onToolCall`
+observer (`web/lib/agent-runs.ts`). `web/lib/engine.ts` chooses between them and
+the routes call only that. The browser polls `/api/runs/<id>` once a second.
+
+Two things are not in the case store and are tracked by `web/lib/run-store.ts`,
+mirrored under `.oubliette/runs/`: the live phase, and the sandbox rehearsal
+transcript. The rehearsal panel
+shows both attempts - the seeded fixture deliberately fails the first on a
+foreign-key violation and succeeds on the canonical-order retry.
+
+The verification panel scores the case against `fixture/scripts/truth-core.js`,
+which derives the correct answer straight from Postgres and is never reachable
+by the agent. Its report is cached per case under `.oubliette/truth/`, because
+after a successful erasure the subject's rows are gone and ground truth can no
+longer be recomputed.
+
+## The agent, and the two engines
+
+The investigation can be driven two ways. Both call the same MCP servers, so
+they have identical safety properties - the guarantees live in the adapters,
+not in whichever engine is calling.
+
+- **`agentic`** (default) - an LLM on the [TrueForge](https://trueforge.dev)
+  harness decides what to search, what to record, and what to withhold.
+  TrueForge runs the loop and owns the approval pause.
+- **`deterministic`** - the original fixed script in `agent/`. Kept as the
+  oracle for "is this the model or the plumbing?", and as a one-flag fallback.
+
+Pick per request with `{"engine": "deterministic"}` on `POST /api/cases`, or
+set `OUBLIETTE_ENGINE` to change the default.
+
+### Running the agentic engine
+
+```bash
+cp .env.example .env                   # then put your OPENAI_API_KEY in .env
+npx @truefoundry/trueforge@latest      # the harness, on :8790
+node --env-file=.env scripts/trueforge-bootstrap.mjs
+```
+
+Bootstrap registers the four MCP servers, the agent, and - if `OPENAI_API_KEY`
+is set - the model provider, so the TrueForge UI is never required. It is
+idempotent: re-run it after editing `agent/oubliette-agent.json`.
+
+The key is read from the environment and handed to TrueForge, which keeps it in
+its own settings. Nothing in this repo writes it to disk, and `.env` is
+gitignored. If the agent's model is already configured the script leaves the
+provider untouched rather than overwriting it, so a hand-configured TrueForge
+keeps its other models.
+
+`node scripts/trueforge-smoke.mjs [email]` drives one case straight through the
+harness and prints what the agent did, without the UI in the way.
+
+### Why the adapters refuse instead of truncating
+
+Handing the loop to a model changed what the MCP layer has to guarantee. When
+the caller was a fixed script, several correctness properties lived in that
+script by convention. They are now enforced where a caller cannot route around
+them:
+
+- `finding_add` records a `retained_refund` as **retained** whatever
+  disposition is passed, and `plan_create` refuses a plan that claims to delete
+  one. Preserving live financial obligations is the point of the system; it was
+  previously a convention the caller happened to follow.
+- `system` and `record_type` are **closed enums**. They decide which executor a
+  record routes to and which table it is deleted from, and the retention rule
+  matches `record_type` exactly - so free text let an agent name things its own
+  way and silently slip past all three.
+- `db_find_accounts` refuses an email matching more than one account. People
+  share names and addresses get recycled; erasing the wrong person is
+  unrecoverable.
+- `case_complete_discovery` refuses a case with no findings.
+- Storage listings and `db_get_account_emails` **fail rather than return a
+  partial set**. A short result is indistinguishable from a complete one, and
+  planning from one silently leaves data behind.
+- `db_search_event_log` batches internally, and `finding_add_many` records a
+  whole result set in one call - a real subject has hundreds of records, and
+  one call per row is how an investigation runs out of patience and stops
+  early.
+
+`src/db.test.js`, `src/mcp-server.test.js`, and `mcp/database-server.test.js`
+drive these directly, with no agent involved: they are the proof that safety
+does not depend on the model behaving well.
+
+## TrueForge agent (deterministic engine)
 
 Start the four HTTP MCP servers, then prepare an investigation plan with:
 
@@ -78,8 +242,13 @@ node agent/create-agent.js customer@example.com
 The agent investigates through read-only tools, records findings, creates and
 rehearses a plan, and stops for human approval. Only an explicit approval lets
 it call `oubliette_execute_erasure`; the result includes the verification
-certificate. Server URLs and the approval policy are documented in
-`trueforge.config.json` and can be overridden with environment variables.
+certificate. Server URLs come from `MCP_SERVERS` in
+`agent/trueforge-agent.js` and can be overridden with environment variables.
+
+For the agentic engine the equivalent configuration is
+`agent/oubliette-agent.json` - the model, the instructions, which MCP servers
+are attached, and which tools require approval - applied to the harness by
+`scripts/trueforge-bootstrap.mjs`.
 
 Sandbox MinIO execution is isolated in `src/minio-executor.js`. It accepts no
 free-form object list: keys are derived only from erase actions in a hash-

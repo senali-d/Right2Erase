@@ -106,7 +106,15 @@ function readExecutionState(caseId, planHash, approvedBy) {
     WHERE case_id = ? AND plan_hash = ? AND case_revision = ?
     ORDER BY id DESC LIMIT 1`).get(caseId, planHash, subject.revision);
   if (!approval) throw new Error('the current plan has not been approved');
-  if (approval.approved_by !== approvedBy) throw new Error('approved_by does not match the approving identity');
+  // approvedBy is a claim to be checked, never a source of authority. The
+  // stored approval row is the authority: it is what a human created, for this
+  // exact plan at this exact revision. A caller may pass an identity to assert
+  // "I believe X approved this", and a mismatch is refused - but a caller that
+  // omits it (the agent, which has no business naming the approver) simply
+  // executes under whoever actually approved.
+  if (approvedBy != null && approval.approved_by !== approvedBy) {
+    throw new Error('approved_by does not match the approving identity');
+  }
   if (subject.status === 'completed' || db.prepare('SELECT 1 FROM certificates WHERE case_id = ?').get(caseId)) {
     throw new Error('case already has a certificate');
   }
@@ -171,9 +179,14 @@ function recordExecutionCertificate({ caseId, planHash, manifest = [], withheld 
 }
 
 /** Execute the only destructive workflow owned by Oubliette. */
-export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, interfaces = executionInterfaces }) {
-  if (!caseId || !planHash || !approvedBy) throw new Error('case_id, plan_hash, and approved_by are required');
+export async function oublietteExecuteErasure({ caseId, planHash, approvedBy = null, interfaces = executionInterfaces }) {
+  if (!caseId || !planHash) throw new Error('case_id and plan_hash are required');
   const initial = readExecutionState(caseId, planHash, approvedBy);
+  // From here on, the approving identity is the stored one. Everything that
+  // records who authorised this - the execution run, the adapters, the
+  // certificate - reads it from the approval, so no caller-supplied name can
+  // end up in the audit trail.
+  const approver = initial.approval.approved_by;
   const grouped = { database: [], minio: [], billing: [] };
   const withheld = [];
   for (const action of initial.actions) {
@@ -203,7 +216,10 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
     const approval = db.prepare(`SELECT * FROM approvals
       WHERE id = ? AND case_id = ? AND plan_hash = ? AND case_revision = ?`)
       .get(initial.approval.id, caseId, planHash, initial.subject.revision);
-    if (!approval || approval.approved_by !== approvedBy) {
+    // Re-read under the transaction: the approval that authorised this must
+    // still be the same row, belonging to the same identity, as when the plan
+    // was validated a moment ago.
+    if (!approval || approval.approved_by !== approver) {
       throw new Error('approval changed before execution; refusing to execute');
     }
     if (run) {
@@ -243,8 +259,8 @@ export async function oublietteExecuteErasure({ caseId, planHash, approvedBy, in
         caseId,
         plan_hash: planHash,
         planHash,
-        approved_by: approvedBy,
-        approvedBy,
+        approved_by: approver,
+        approvedBy: approver,
         plan: initial.body,
         approval: initial.approval,
         grouped_actions: grouped[name],
