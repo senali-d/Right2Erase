@@ -40,20 +40,50 @@ async function send(method, path, body) {
   return text ? JSON.parse(text) : null;
 }
 
-/** The provider's own declared limits for a model, from TrueForge's catalog. */
-async function catalogProperties(providerType, modelId, modelName) {
+/**
+ * Resolve one model entry: its upstream id and the properties that go with it.
+ *
+ * The two must come from the same entry. A model's TrueForge name and its
+ * provider id are different strings - `gpt-5-5` is the label, `gpt-5.5` is what
+ * OpenAI answers to - so pairing an id from one source with properties matched
+ * by name from another can describe a model that does not exist. Returning them
+ * together is what makes that impossible.
+ *
+ * An explicit OPENAI_MODEL_ID identifies a model by its upstream id, so it is
+ * matched strictly against `model_id`; a name-only lookup would otherwise be
+ * free to return a different model whose label happened to match first.
+ */
+async function resolveModel(providerType, { name, modelId, configured }) {
+  const pick = (entry) => (entry ? { modelId: entry.model_id, properties: entry.properties } : null);
+
+  // The catalog is consulted first, even when an entry is already configured.
+  // It is the provider's own statement of what a model is called upstream, so
+  // deferring to whatever happens to be stored would let one bad write persist
+  // through every later run - which is exactly how `gpt-5-5` ended up recorded
+  // as its own model id. A configured entry is the fallback, for models the
+  // catalog does not list; OPENAI_MODEL_ID is the way to override deliberately.
+  let catalogModels = [];
   try {
     const response = await fetch(`${BASE}/api/v1/catalogs/model-providers`);
-    if (!response.ok) return null;
-    const catalog = await response.json();
-    const provider = (catalog.data || []).find((entry) => entry.type === providerType);
-    const match = (provider?.models || []).find(
-      (entry) => entry.model_id === modelId || entry.name === modelName,
-    );
-    return match?.properties ?? null;
+    if (response.ok) {
+      const catalog = await response.json();
+      catalogModels = (catalog.data || []).find((entry) => entry.type === providerType)?.models || [];
+    }
   } catch {
-    return null;
+    // Falls through to the configured entry, or to no match at all.
   }
+
+  const match = modelId
+    ? catalogModels.find((entry) => entry.model_id === modelId)
+    : catalogModels.find((entry) => entry.name === name);
+  if (match) return pick(match);
+
+  // Nothing in the catalog. An explicitly requested id can still be honoured if
+  // the provider already has an entry for exactly that id.
+  if (modelId) {
+    return configured?.model_id === modelId && configured?.properties ? pick(configured) : null;
+  }
+  return pick(configured?.model_id && configured?.properties ? configured : null);
 }
 
 export async function bootstrap() {
@@ -116,25 +146,46 @@ export async function bootstrap() {
     const keep = (existing?.manifest.models || []).filter((entry) => entry.name !== modelName);
 
     // Every model entry must carry `properties` - context length, output cap,
-    // reasoning efforts - or the write is rejected. Take them from the entry
-    // already configured, else from TrueForge's own catalog, so the values are
-    // the provider's rather than something guessed here.
-    const modelId = process.env.OPENAI_MODEL_ID || modelName;
-    const configured = (existing?.manifest.models || []).find((entry) => entry.name === modelName);
-    const properties = configured?.properties ?? (await catalogProperties('openai', modelId, modelName));
-    if (!properties) {
-      throw new Error(`${model} is not in TrueForge's model catalog and has no configured properties; set OPENAI_MODEL_ID to a catalog model id`);
+    // reasoning efforts - or the write is rejected. The upstream id and those
+    // properties are resolved together from one entry, never assembled from
+    // two: the name is TrueForge's label and the id is what the provider
+    // answers to, so defaulting one to the other writes a model that does not
+    // exist upstream.
+    const resolved = await resolveModel('openai', {
+      name: modelName,
+      modelId: process.env.OPENAI_MODEL_ID,
+      configured: (existing?.manifest.models || []).find((entry) => entry.name === modelName),
+    });
+    if (!resolved) {
+      throw new Error(
+        `cannot resolve ${model}: ${process.env.OPENAI_MODEL_ID
+          ? `OPENAI_MODEL_ID="${process.env.OPENAI_MODEL_ID}" is not in TrueForge's model catalog`
+          : `no catalog entry named "${modelName}" and none configured`}`,
+      );
+    }
+
+    // model_ids are unique within a provider, so pointing this name at an id
+    // another entry already claims is a conflict the write would reject with a
+    // message that does not say what to do about it. Two names for one upstream
+    // model is not something to resolve by quietly dropping the other entry.
+    const clash = keep.find((entry) => entry.model_id === resolved.modelId);
+    if (clash) {
+      throw new Error(
+        `model id "${resolved.modelId}" is already configured as "${clash.name}". `
+        + `Point the agent at openai/${clash.name} in agent/oubliette-agent.json `
+        + 'rather than aliasing the same model under a second name.',
+      );
     }
 
     await send('PUT', '/api/v1/settings/model-providers', {
       manifest: {
         type: 'openai',
         auth: { api_key: process.env.OPENAI_API_KEY },
-        models: [...keep, { name: modelName, model_id: modelId, properties }],
+        models: [...keep, { name: modelName, model_id: resolved.modelId, properties: resolved.properties }],
       },
     });
     providers = await listProviders();
-    console.log(`model provider: openai key set from environment (${modelName}${
+    console.log(`model provider: openai key set from environment (${modelName} -> ${resolved.modelId}${
       keep.length ? `, kept ${keep.length} other model${keep.length === 1 ? '' : 's'}` : ''})`);
   } else if (names(providers).includes(model)) {
     console.log(`model provider: ${model} already configured in TrueForge (no OPENAI_API_KEY in environment)`);
