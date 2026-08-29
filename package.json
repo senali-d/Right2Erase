@@ -26,6 +26,7 @@
     "mcp:storage:http": "MCP_TRANSPORT=http node mcp/storage-server.js",
     "mcp:oubliette": "node src/mcp-server.js",
     "mcp:oubliette:http": "MCP_TRANSPORT=http node src/mcp-server.js",
+    "mcp:all": "node scripts/mcp-all.js",
     "test": "node --test && npm --workspaces run test --if-present"
   },
   "engines": {
