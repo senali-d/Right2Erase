@@ -1,14 +1,302 @@
-# Oubliette
+# Right2Erase
 
-A safety-first, multi-system erasure demo. ShopKart is a deterministic fake company; an agent must discover personal data across Postgres, MinIO, logs, and billing, preserve a live refund, and execute only a reviewed plan.
+An agent that carries out a GDPR right-to-erasure request across four systems,
+and cannot delete anything until a human approves the exact plan it rehearsed.
 
-## Running the app
+![The approval gate: what the agent found, what it refuses to delete, the
+rehearsal that proved the plan safe, and the human decision that has not been
+made yet](docs/images/approval-gate.png)
+
+## The problem
+
+"Delete my data" sounds like one operation. It is not. A single customer's
+personal data is scattered across every system a company runs, and the pieces do
+not agree with each other:
+
+- **It hides behind old identities.** People change their email address. The
+  account row moves on; the log entries filed under the old address do not.
+  Search for the current email and you will confidently miss five months of
+  history.
+- **Some of it is not linked to anything.** A return receipt in object storage
+  can have no foreign key back to the account at all - reachable only by a
+  string inside its file path. A cascade delete never touches it.
+- **Some of it must survive.** An open refund is a live financial obligation.
+  Regulators require erasure; they also require you to keep records of money you
+  still owe. Deleting it to satisfy one rule breaks the other.
+- **Other people get caught in the net.** Two customers can share a display
+  name. Match on the wrong field and you erase a stranger, which is the one
+  mistake with no undo.
+- **Order matters.** Delete an order before its line items and the database
+  refuses. Delete in the wrong order across systems and you are left half-erased
+  with no way back.
+
+Handing this to an LLM makes it worse, not better. A model that is 95% right is
+not 95% compliant - it is a system that quietly destroys the wrong person's data
+one time in twenty, and produces no evidence of what it did.
+
+## The five traps
+
+Those five problems are not described in the abstract. Each one is deliberately
+planted in ShopKart, the fake company the agent investigates, and the demo
+succeeds only if the agent walks through all five:
+
+| #   | Trap               | What it punishes                                                                                                  | Getting it wrong looks like                                         |
+| --- | ------------------ | ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| 1   | **Ordering**       | Orders, their line items and their refunds are chained together. Deleting from the top down is rejected outright. | A half-finished erasure that cannot be resumed or undone.           |
+| 2   | **Retention hold** | One order carries an unsettled refund - money still owed - while a settled one nearby is safe to remove.          | Destroying the record of a live debt, or timidly keeping both.      |
+| 3   | **Name collision** | A second, unrelated customer shares the subject's display name.                                                   | Erasing a stranger. The one mistake with no undo.                   |
+| 4   | **Orphaned file**  | A return receipt in object storage has no link back to the account except a string in its path.                   | Reporting success while the customer's data is still sitting there. |
+| 5   | **Identity chain** | The subject changed email address; months of history are still filed under the old one.                           | A confident, complete-looking erasure that misses half the data.    |
+
+Traps 2 and 3 are the interesting ones, because they punish over-deleting
+rather than under-deleting. An agent that simply deletes everything it can find
+fails this demo just as hard as one that gives up early.
+
+## How Right2Erase solves it
+
+The safety of this system does not depend on the agent behaving well. It depends
+on what the agent is able to do at all - and it is able to do very little. The
+guarantees hold no matter how badly the model reasons, and hold identically
+whether a language model or a fixed script is driving the investigation.
+
+**The agent is never given a delete button.** Everything it uses to search the
+company's systems can only read. There is exactly one way to destroy anything in
+the entire system, and it will not run unless a human has already approved that
+precise plan. Change so much as one record after approval and the approval no
+longer matches, so execution refuses.
+
+**Nothing is deleted that was not first proven safe.** Before a human is even
+asked, the subject's records are copied into a disposable replica of the
+company's database, and the deletion is performed there and immediately undone.
+If the order is wrong, it breaks against the copy instead of against real
+customer data. A plan that has not survived that rehearsal is never offered for
+approval.
+
+**Records that must survive cannot be deleted by mistake.** An open refund is
+filed as protected the moment it is discovered, regardless of what the agent
+thinks should happen to it, and any plan claiming to delete one is thrown out.
+The agent is not trusted to remember the rule, because it is not the agent's
+rule to remember.
+
+**The agent cannot invent its own vocabulary.** It must describe every record it
+finds using a fixed list of terms. Those terms determine where a record lives
+and how it is treated, so allowing the agent to phrase things its own way would
+have let a single careless word route a record somewhere nobody intended.
+
+**Anything ambiguous stops the run.** If an email address matches two different
+people, the system refuses to guess which one you meant. If a search cannot
+return its complete results, it fails rather than returning some of them,
+because a partial answer looks exactly like a complete one - and planning an
+erasure from it silently leaves the customer's data behind.
+
+**Every run leaves evidence that cannot be edited afterwards.** Completing an
+erasure issues a permanent certificate recording who approved it and what each
+system actually confirmed deleting. Nothing can alter or remove it later.
+Separately, an independent checker works out the correct answer directly from
+the source data, by a route the agent has no access to, and scores the agent's
+plan against it - so the demo can show whether the agent was right, rather than
+asking you to take its word for it.
+
+## What you'll see
+
+You type one email address and press **Open erasure case**. Everything below is
+a real run against the seeded fixture - these are the actual numbers.
+
+**The agent investigates.** It resolves who the subject is, refuses to continue
+if that is ambiguous, then searches all four systems: the database, object
+storage, the billing provider, and the event log - including under the
+subject's previous email address. The rail on the left fills in as it goes.
+
+**It builds a plan and rehearses it.** The plan comes to **32 deletions and one
+record withheld**. The rehearsal runs against a throwaway copy and the first
+attempt _fails_ - a foreign-key violation, exactly as trap 1 intends - then
+retries in the correct leaf-to-root order and passes. Both attempts are shown;
+the failure is not hidden, because the recovery is the point.
+
+**It stops.** Nothing has been deleted. The screen shows what will be destroyed,
+what will not, and why - the unsettled refund on order SK-08004 is held back
+with its reason. The only way forward is a human typing their name and
+confirming twice.
+
+**You approve, and it executes.** Each adapter reports what it actually deleted,
+and a certificate is issued that nothing can later edit.
+
+![Erasure complete: 29 Postgres records, 2 objects and 1 billing record deleted,
+1 withheld, with the approver and plan hash recorded](docs/images/certificate.png)
+
+**Then it is checked against an answer the agent never had access to.** A
+separate checker derives the correct result straight from the source database
+and scores the plan line by line - including confirming the namesake account was
+never touched.
+
+![Verified against ground truth: ten rows of expected versus found, all
+matching, and the must-not-touch account untouched](docs/images/ground-truth.png)
+
+That last panel is the difference between a demo that claims it worked and one
+that shows it. It is also what caught a real bug during development: the plan
+looked correct and only the checker disagreed.
+
+## Architecture
+
+The thick edge is the only one that destroys anything, and it is the only edge
+gated on a human. Everything the agent reaches is a read-only adapter; the
+checker that grades its work sits outside the agent's reach entirely.
+
+```mermaid
+flowchart LR
+    B["Browser<br/>control center"]
+    N["Next.js<br/>:3000"]
+
+    TF["TrueForge harness :8790<br/><i>runs the agent loop</i>"]
+
+    subgraph RO["Discovery adapters - read-only"]
+        direction TB
+        MDB["ShopKart DB<br/>:4012"]
+        MST["ShopKart storage<br/>:4013"]
+        MBI["Billing<br/>:4011"]
+    end
+
+    subgraph SRC["ShopKart - the fake company"]
+        direction TB
+        PG[("Postgres")]
+        MIN[("MinIO")]
+        BIL["Billing API<br/>:4010"]
+    end
+
+    CASE["Case store :4014<br/><b>sole destructive path</b>"]
+    SQL[("cases · plans · approvals<br/>immutable certificates")]
+    TRUTH["Ground-truth checker<br/><i>fixture only - grades the run</i>"]
+
+    B -->|"HTTP only"| N
+    N --> TF
+    N -->|"read cases,<br/>record approval"| CASE
+    TF -->|"MCP"| RO
+    TF -->|"MCP"| CASE
+    MDB --> PG
+    MST --> MIN
+    MBI --> BIL
+    CASE --> SQL
+    CASE ==>|"only after approval"| SRC
+    N -.-> TRUTH
+    TRUTH -.->|"reads source directly"| PG
+
+    classDef danger stroke:#e5484d,stroke-width:2px
+    classDef check stroke:#f5a524,stroke-dasharray:4 3
+    class CASE danger
+    class TRUTH check
+```
+
+Three things the diagram is meant to make obvious:
+
+- **The browser never touches MCP.** Every call goes through Next.js route
+  handlers. The adapters serve no CORS headers and enforce an origin allowlist,
+  so a page in a browser cannot reach them even if it tried.
+- **The agent's reach is the adapters, and nothing else.** Whatever drives the
+  loop - the model, or the deterministic fallback that can stand in for it -
+  plugs into the same box and inherits the same limits. Changing who decides
+  what to search changes nothing about what is reachable.
+- **The checker is scaffolding, not a component.** It reads the source data
+  directly, by a route no tool exposes, so it can grade the plan without the
+  agent being able to influence the answer. It exists only because ShopKart is a
+  fixture whose correct answer is knowable in advance - a real deployment has no
+  oracle to check against, which is precisely why the rest of the diagram has to
+  hold on its own.
+
+## How the TrueForge harness is used
+
+[TrueForge](https://trueforge.dev) runs the agent loop. It is not a wrapper this
+project wrote around a model - it owns the parts that are genuinely hard to get
+right, so this repo can spend its complexity on the safety boundary instead.
+
+What TrueForge provides:
+
+- **The loop itself** - model calls, tool dispatch, retries, and context
+  compaction across an investigation that runs to dozens of tool calls.
+- **MCP as the only interface.** The four adapters are registered as remote MCP
+  servers. The model reaches ShopKart exclusively through them, so the read-only
+  annotations and closed enums are not advice - they are the entire surface the
+  agent has.
+- **The approval pause.** `require_approval_for_tools` names
+  `oubliette_execute_erasure`, so the harness suspends the turn mid-run when the
+  agent tries to execute, and resumes it only when the control center submits a
+  decision. The human gate is a property of the runtime, not something the agent
+  chooses to respect.
+- **Credential custody.** The model key is handed to TrueForge, which stores it
+  in its own settings and returns it redacted. Nothing in this repo writes it to
+  disk.
+
+The agent is declared in `agent/oubliette-agent.json` - its instructions, model,
+which tools each server exposes, and which of them require approval.
+`scripts/trueforge-bootstrap.mjs` registers that definition, the four MCP
+servers, and the model provider over TrueForge's API, so **the TrueForge UI is
+never needed to configure anything**. It is idempotent: re-run it after editing
+the agent.
+
+Two deliberate configuration choices are worth knowing, because both were found
+the hard way:
+
+- **The sandbox is off.** Enabling it also enables Code Mode, which routes every
+  MCP call through a generic wrapper - and `require_approval_for_tools` matches
+  the tool the model names, so the wrapper made the approval gate silently stop
+  firing. The gate is the point of the demo, so the sandbox goes.
+- **Tools are not preloaded**, so TrueForge dispatches them through a `call_tool`
+  wrapper and reports that wrapper's name on the event stream. `web/lib/trueforge-runs.ts`
+  unwraps it to recover the real tool, which is what drives the phase rail, the
+  case id, and the rehearsal transcript.
+
+## Repository
+
+- `fixture/` - ShopKart fake services, schema, seed data, and operator-only truth checker
+- `mcp/` - agent-facing MCP adapters for the fake services
+- `agent/` - both engines: the deterministic script (`trueforge-agent.js`, `create-agent.js`) and the TrueForge agent definition (`oubliette-agent.json`)
+- `src/` - Right2Erase: the case store, plans, approvals, and the sole destructive path
+- `web/` - the Data Erasure Control Center (Next.js)
+- `docs/` - architecture, capability map, and Phase 0 evidence
+- `Dockerfile`, `railway.json`, `scripts/railway-*.sh` - the single-container deployment
+
+## Qodo Code Review Evidence
+
+Qodo reviewed PR #1 (ShopKart fixture). The review and remediation history are
+available in the GitHub PR: https://github.com/senali-d/Right2Erase/pull/1
+
+## Existing compatibility commands
+
+From `fixture/`: `npm run up`, `npm run seed`, `npm run truth`, `npm run reset`, and `npm run mcp:billing:http` remain available. From the repository root, use `make mcp-billing-http` to start the billing MCP adapter.
+
+## Running it locally
 
 Requirements: Docker and Node.js 22.18+.
 
+### 1. Set up once
+
 ```bash
-./scripts/setup.sh   # installs deps, starts Docker services, seeds ShopKart
-npm run dev          # starts the 4 MCP servers and the control center
+cp .env.example .env     # then put your OPENAI_API_KEY in it
+./scripts/setup.sh       # installs deps, starts Docker services, seeds ShopKart
+```
+
+`setup.sh` brings up `docker-compose.yml` (Postgres `:5432`, MinIO
+`:9000`/`:9001`, the fake billing API `:4010`) and seeds the fixture. It is a
+one-time step.
+
+### 2. Start the TrueForge harness
+
+Only needed for the default `agentic` engine - skip it if you set
+`OUBLIETTE_ENGINE=deterministic`. **`npm run dev` does not start it**, which is
+the usual reason an agentic run fails with nothing to show for itself.
+
+```bash
+npx @truefoundry/trueforge@latest                       # the harness, on :8790
+node --env-file=.env scripts/trueforge-bootstrap.mjs    # register agent + key
+```
+
+Bootstrap is idempotent - re-run it after editing `agent/oubliette-agent.json`,
+or to rotate the key. Run it in a second terminal, leaving the harness running
+in the first.
+
+### 3. Start the app
+
+```bash
+npm run dev              # the 4 MCP servers and the control center
 ```
 
 Open <http://localhost:3000>, enter `ravi.sharma@example.com`, and press
@@ -16,24 +304,20 @@ Open <http://localhost:3000>, enter `ravi.sharma@example.com`, and press
 rehearses it in a throwaway sandbox, and stops at the approval gate. Nothing is
 deleted until you click **Approve & execute**.
 
-`setup.sh` is a one-time step. After that, `npm run dev` is all you need.
+After that first setup, steps 2 and 3 are all you need.
 
-### What each command starts
+### What `npm run dev` starts
 
-`./scripts/setup.sh` runs `npm install`, brings up `docker-compose.yml`
-(Postgres `:5432`, MinIO `:9000`/`:9001`, the fake billing API `:4010`), and
-seeds the fixture data.
+It runs `scripts/dev-all.sh`, which starts five Node processes in one terminal
+and shuts all of them down together if any one exits:
 
-`npm run dev` runs `scripts/dev-all.sh`, which starts five Node processes in one
-terminal and shuts all of them down together if any one exits:
-
-| Process                       | Port |
-| ----------------------------- | ---- |
-| Billing MCP adapter           | 4011 |
-| ShopKart database MCP adapter | 4012 |
-| ShopKart storage MCP adapter  | 4013 |
-| Oubliette case management MCP | 4014 |
-| Control center (Next.js)      | 3000 |
+| Process                         | Port |
+| ------------------------------- | ---- |
+| Billing MCP adapter             | 4011 |
+| ShopKart database MCP adapter   | 4012 |
+| ShopKart storage MCP adapter    | 4013 |
+| Right2Erase case management MCP | 4014 |
+| Control center (Next.js)        | 3000 |
 
 All four MCP servers bind to `127.0.0.1`, so no `MCP_AUTH_TOKEN` is needed
 locally. The browser never calls them directly; the Next.js server does.
@@ -44,25 +328,36 @@ stop those with `npm run down`.
 ### Between demo takes
 
 ```bash
-# stop npm run dev first: the Oubliette MCP server holds the case DB open,
+# stop npm run dev first: the Right2Erase MCP server holds the case DB open,
 # so clearing it while that process is alive has no effect on it
 ./scripts/demo-reset.sh
 npm run dev
 ```
 
-This re-seeds ShopKart and clears Oubliette's cases, run mirrors, and cached
+This re-seeds ShopKart and clears Right2Erase's cases, run mirrors, and cached
 ground-truth reports, so the same subject can be investigated again from
 scratch. Cases are permanent audit records with no delete path, which is why
 reopening one without a reset is refused.
 
 ### Troubleshooting
 
-- **"cannot reach the Oubliette MCP server"** in the UI: an MCP server is not
+- **"cannot reach the Right2Erase MCP server"** in the UI: an MCP server is not
   running. `npm run dev` starts all four; check its output for a port conflict.
 - **"a case already exists for ..."**: expected. Open the existing case, or run
   `./scripts/demo-reset.sh` for a clean slate.
 - **Port already in use**: something from a previous run survived. Check with
   `lsof -i :3000` (or 4011-4014) and stop it.
+- **An agentic run finishes in seconds having done nothing.** The agent could
+  not reach any tool, and a run that finds no usable tools ends cleanly rather
+  than loudly. Either the harness is not running (`:8790` - `npm run dev` does
+  not start it), or `MCP_AUTH_TOKEN` is set but the servers were registered
+  before it was, so TrueForge is calling them without a bearer token. Re-run
+  `scripts/trueforge-bootstrap.mjs`, which registers the token with each server.
+- **`429: You have no credits remaining`**: the model provider is out of
+  credit. The run reports it verbatim. `OUBLIETTE_ENGINE=deterministic` demos
+  the whole safety path without a model.
+- **The subject is "not found" on a re-run**: a completed erasure really did
+  delete them. Re-seed with `./scripts/demo-reset.sh`.
 
 ### Verifying the agent independently
 
@@ -80,22 +375,6 @@ is the terminal equivalent of that screen.
 Other useful scripts: `npm run web:build` produces a production build, and
 `npm run reset` re-seeds ShopKart only.
 
-### Fixture size
-
-`SEED_PROFILE=small npm run seed` builds a 3-account ShopKart whose subject owns
-about 25 records instead of 440. The default, `full`, is 202 accounts and is what
-the rest of this file describes.
-
-Both profiles seed the same five cases, so the safety story is identical either
-way. The difference is cost: every record the subject owns becomes a finding the
-agent has to read, stage, rehearse and delete, so `small` is much cheaper to
-iterate against — a ~25-action plan rather than a 444-action one.
-
-Shrinking the _background_ alone does almost nothing, which is worth knowing
-before reaching for `SEED_ACCOUNTS`: at 20 background accounts the plan is still
-exactly 444 deletions, because none of the subject's data comes from that loop.
-See `fixture/README.md` for the full comparison.
-
 ## Deploying
 
 The whole demo ships as **one container**: Postgres, MinIO, the billing API, the
@@ -107,305 +386,10 @@ managed services would mean weakening the guards this project exists to
 demonstrate, so instead the deployment satisfies them.
 
 ```bash
-docker build -t oubliette .
-docker run --rm -p 3000:3000 -e OPENAI_API_KEY=sk-... -v oubliette-state:/data oubliette
+docker build -t right2erase .
+docker run --rm -p 3000:3000 -e OPENAI_API_KEY=sk-... -v right2erase-state:/data right2erase
 ```
 
 First boot runs `initdb` and seeds 200 ShopKart accounts, so give it a minute or
 two before the UI answers. Set `SEED_PROFILE=small` to seed 3 accounts instead —
 faster to boot, and far fewer findings for the model to work through.
-
-### On Railway
-
-`railway.json` builds from the `Dockerfile` and health-checks `/`. Create one
-service from this repo, attach a **volume mounted at `/data`**, and set a single
-variable:
-
-```
-OPENAI_API_KEY=sk-...
-```
-
-Everything else has a working default in `scripts/railway-entrypoint.sh`. If
-`OPENAI_API_KEY` is missing the container still boots and still demos: it logs a
-warning, skips the TrueForge harness, and falls back to the deterministic
-engine, which drives the same MCP servers through the same approval gate.
-
-Two variables are worth knowing about because setting them incorrectly breaks
-the demo rather than degrading it:
-
-- **Do not set `NODE_ENV`.** `next start` sets its own; exporting `production` to
-  the whole container disarms both destructive executors, and **Approve &
-  execute** fails with `sandbox-only`.
-- **Do not set `MCP_AUTH_TOKEN`.** All four adapters stay on `127.0.0.1`, which
-  is the case `mcp/http-transport.js` lets through without one.
-
-Only `/data` is persistent, and it holds one thing: Oubliette's SQLite audit
-trail - cases, plans, approvals, and the immutable erasure certificates. It
-survives redeploys. ShopKart itself is reseeded on every boot, which is both
-free (the seed is deterministic, so the data comes back identical) and necessary
-(the billing API keeps its customers in memory and only the seed populates it).
-The rehearsal sandbox is deliberately _not_ on the volume: those files are
-complete copies of a subject's personal data, and a crash should leave them on a
-disk that dies with the container.
-
-Sizing, measured on the built image: **~400 MB idle** with everything including
-TrueForge, **~500 MB peak** while a case runs, and ~335 MB if the harness is
-skipped. That fits Railway's Trial (1 GB, $5 one-time credit) with room to
-spare. It does not fit the Free plan: the 0.5 GB ceiling is below the measured
-peak, and the $1/month credit funds about four days of uptime regardless. At
-Trial rates the $5 covers roughly a month of idle hosting, so deploy near the
-day you need it. Railway's serverless sleep will not stretch that - the `pg`
-pools hold a connection open, which is exactly what keeps a service awake.
-
-The four MCP servers run as one process in the container
-(`scripts/mcp-all.js`) rather than the four `npm run dev` starts, which buys
-back ~110 MB of idle V8 heaps. Nothing else about them differs.
-
-### Between demo takes, deployed
-
-```bash
-railway ssh -- /app/scripts/railway-reset.sh
-```
-
-This clears Oubliette's state and restarts the container, which reseeds
-ShopKart. It is the deployed equivalent of `./scripts/demo-reset.sh`, and it
-exists for the same reason: cases are permanent audit records, so a subject who
-already has one cannot be investigated again until the case store is cleared.
-
-## Repository
-
-- `fixture/` - ShopKart fake services, schema, seed data, and operator-only truth checker
-- `mcp/` - agent-facing MCP adapters for the fake services
-- `agent/` - both engines: the deterministic script (`trueforge-agent.js`, `create-agent.js`) and the TrueForge agent definition (`oubliette-agent.json`)
-- `src/` - Oubliette: the case store, plans, approvals, and the sole destructive path
-- `web/` - the Data Erasure Control Center (Next.js)
-- `docs/` - architecture, capability map, and Phase 0 evidence
-- `Dockerfile`, `railway.json`, `scripts/railway-*.sh` - the single-container deployment
-
-## Qodo Code Review Evidence
-
-Qodo reviewed PR #1 (ShopKart fixture). The review and remediation history are
-available in the GitHub PR: https://github.com/senali-d/Right2Erase/pull/1
-
-## Existing compatibility commands
-
-From `fixture/`: `npm run up`, `npm run seed`, `npm run truth`, `npm run reset`, and `npm run mcp:billing:http` remain available. From the repository root, use `make mcp-billing-http` to start the billing MCP adapter.
-
-## Oubliette case database
-
-Phase 1 now includes a durable SQLite case-management MCP server in `src/`. It stores
-cases, findings, immutable plan versions and hashes, approvals, and execution
-certificates; it does not perform source-system deletion.
-
-```bash
-npm run mcp:oubliette              # stdio
-MCP_TRANSPORT=http npm run mcp:oubliette:http  # http://127.0.0.1:4014/mcp
-```
-
-The database defaults to `.oubliette/oubliette.db` and can be relocated with
-`OUBLIETTE_DB_PATH`. The intended workflow is `case_create` → `finding_add` →
-`plan_create` → human `plan_approve` → `oubliette_execute_erasure`. The execution
-tool is the sole destructive Oubliette entry point: it revalidates the canonical
-hash, approval identity, current revision, and withholds before calling injected
-database, MinIO, and billing interfaces. Those interfaces intentionally refuse
-until deployment wiring supplies safe, transactional adapters.
-
-## Read-only discovery MCPs
-
-The database and storage adapters expose discovery only; every tool is
-annotated `readOnlyHint: true` and neither adapter has write or delete tools.
-Run them over stdio for a local connector or HTTP for TrueForge:
-
-```bash
-npm run mcp:db:http       # http://127.0.0.1:4012/mcp
-npm run mcp:storage:http  # http://127.0.0.1:4013/mcp
-```
-
-The billing adapter remains separate at `http://127.0.0.1:4011/mcp` and exposes
-read-only discovery plus dry-run preview. Billing deletion is reached only
-through Oubliette's approved execution path.
-
-## Data Erasure Control Center
-
-`web/` is a Next.js UI over the same agent the CLI drives. It is one screen that
-tells one story: who the subject is, where their data lives, what will be
-deleted, what will not, whether the plan was actually tested, who authorized it,
-and what happened.
-
-The browser never talks to MCP. `mcp/http-transport.js` enforces an Origin
-allowlist and serves no CORS headers, so every MCP call goes through Next.js
-route handlers. The UI performs no deletion of its own, on either engine:
-Oubliette independently re-validates the canonical plan hash, the approving
-identity, and the case revision before any adapter runs.
-
-Live progress is derived from tool names, since neither engine emits phases of
-its own. On the agentic engine they come off the TrueForge event stream
-(`web/lib/trueforge-runs.ts`); on the deterministic one from an `onToolCall`
-observer (`web/lib/agent-runs.ts`). `web/lib/engine.ts` chooses between them and
-the routes call only that. The browser polls `/api/runs/<id>` once a second.
-
-Two things are not in the case store and are tracked by `web/lib/run-store.ts`,
-mirrored under `.oubliette/runs/`: the live phase, and the sandbox rehearsal
-transcript. The rehearsal panel
-shows both attempts - the seeded fixture deliberately fails the first on a
-foreign-key violation and succeeds on the canonical-order retry.
-
-The verification panel scores the case against `fixture/scripts/truth-core.js`,
-which derives the correct answer straight from Postgres and is never reachable
-by the agent. Its report is cached per case under `.oubliette/truth/`, because
-after a successful erasure the subject's rows are gone and ground truth can no
-longer be recomputed.
-
-## The agent, and the two engines
-
-The investigation can be driven two ways. Both call the same MCP servers, so
-they have identical safety properties - the guarantees live in the adapters,
-not in whichever engine is calling.
-
-- **`agentic`** (default) - an LLM on the [TrueForge](https://trueforge.dev)
-  harness decides what to search, what to record, and what to withhold.
-  TrueForge runs the loop and owns the approval pause.
-- **`deterministic`** - the original fixed script in `agent/`. Kept as the
-  oracle for "is this the model or the plumbing?", and as a one-flag fallback.
-
-Pick per request with `{"engine": "deterministic"}` on `POST /api/cases`, or
-set `OUBLIETTE_ENGINE` to change the default.
-
-### Running the agentic engine
-
-```bash
-cp .env.example .env                   # then put your OPENAI_API_KEY in .env
-npx @truefoundry/trueforge@latest      # the harness, on :8790
-node --env-file=.env scripts/trueforge-bootstrap.mjs
-```
-
-Bootstrap registers the four MCP servers, the agent, and - if `OPENAI_API_KEY`
-is set - the model provider, so the TrueForge UI is never required. It is
-idempotent: re-run it after editing `agent/oubliette-agent.json`.
-
-The key is read from the environment and handed to TrueForge, which keeps it in
-its own settings. Nothing in this repo writes it to disk, and `.env` is
-gitignored. If the agent's model is already configured the script leaves the
-provider untouched rather than overwriting it, so a hand-configured TrueForge
-keeps its other models.
-
-`node scripts/trueforge-smoke.mjs [email]` drives one case straight through the
-harness and prints what the agent did, without the UI in the way.
-
-### Why the adapters refuse instead of truncating
-
-Handing the loop to a model changed what the MCP layer has to guarantee. When
-the caller was a fixed script, several correctness properties lived in that
-script by convention. They are now enforced where a caller cannot route around
-them:
-
-- `finding_add` records a `retained_refund` as **retained** whatever
-  disposition is passed, and `plan_create` refuses a plan that claims to delete
-  one. Preserving live financial obligations is the point of the system; it was
-  previously a convention the caller happened to follow.
-- `system` and `record_type` are **closed enums**. They decide which executor a
-  record routes to and which table it is deleted from, and the retention rule
-  matches `record_type` exactly - so free text let an agent name things its own
-  way and silently slip past all three.
-- `db_find_accounts` refuses an email matching more than one account. People
-  share names and addresses get recycled; erasing the wrong person is
-  unrecoverable.
-- `case_complete_discovery` refuses a case with no findings.
-- Storage listings and `db_get_account_emails` **fail rather than return a
-  partial set**. A short result is indistinguishable from a complete one, and
-  planning from one silently leaves data behind.
-- `db_search_event_log` batches internally, and `finding_add_many` records a
-  whole result set in one call - a real subject has hundreds of records, and
-  one call per row is how an investigation runs out of patience and stops
-  early.
-
-These are enforced in the server code itself (`src/db.js`, `src/mcp-server.js`,
-`mcp/database-server.js`), independent of the agent: safety does not depend on
-the model behaving well.
-
-## TrueForge agent (deterministic engine)
-
-Start the four HTTP MCP servers, then prepare an investigation plan with:
-
-```bash
-node agent/create-agent.js customer@example.com
-```
-
-The agent investigates through read-only tools, records findings, creates and
-rehearses a plan, and stops for human approval. Only an explicit approval lets
-it call `oubliette_execute_erasure`; the result includes the verification
-certificate. Server URLs come from `MCP_SERVERS` in
-`agent/trueforge-agent.js` and can be overridden with environment variables.
-
-For the agentic engine the equivalent configuration is
-`agent/oubliette-agent.json` - the model, the instructions, which MCP servers
-are attached, and which tools require approval - applied to the harness by
-`scripts/trueforge-bootstrap.mjs`.
-
-Sandbox MinIO execution is isolated in `src/minio-executor.js`. It accepts no
-free-form object list: keys are derived only from erase actions in a hash-
-validated, approved plan, withheld keys are rejected, and PostgreSQL must report
-`{ success: true }` before the injected fixture client is called. The executor
-returns per-object results and requested/deleted/failed counts. The discovery
-adapter remains read-only; production clients are never constructed by this
-path.
-
-## Sandbox rehearsal
-
-Before a plan ever reaches a human, `prepare()` rehearses it. `mcp/snapshot.js`
-backs four ShopKart db tools:
-
-- `db_export_subject_snapshot` copies one account and everything reachable
-  from it (historical emails, orders, order items, settled refunds, support
-  tickets, uploads, matching event-log rows, and referenced retained refunds)
-  into a throwaway SQLite file under `OUBLIETTE_SANDBOX_DIR`
-  (`.oubliette/sandbox` by default) that enforces the same foreign keys as
-  production PostgreSQL. Every call writes a fresh, cryptographically unique
-  file - never a deterministic per-account path - so concurrent exports for
-  the same account (two overlapping investigations, a retry racing the
-  original) can never overwrite or delete each other's snapshot. It returns
-  an opaque `snapshot_id`, not the file's path.
-- `db_rehearse_deletion_plan` and `db_delete_snapshot` both take that
-  `snapshot_id`, never a path. Each server session keeps an in-memory map from
-  id to the real file it exported, so these tools can only ever be pointed at
-  a snapshot this process itself just wrote - not a client-supplied string, so
-  a symlink placed inside the sandbox directory (by anything with local write
-  access to it) has no id to be reached through. The path each id resolves to
-  is still checked with `assertWithinSandbox` before use, which resolves
-  symlinks (`fs.realpathSync`) and rejects anything that isn't a plain regular
-  file, as defense in depth.
-- `db_stage_deletion_actions` appends a chunk of planned delete actions
-  (`MCP_DB_MAX_REHEARSAL_CHUNK`, default 5000, per call) to a snapshot's
-  server-side pending list, up to `MCP_DB_MAX_STAGED_ACTIONS` (default
-  200,000) staged actions total. Nothing is rehearsed by staging alone; call
-  it once for a small account or repeatedly, in order, for a large one. This
-  is what lets a large discovered account (thousands of order_items,
-  event-log rows, etc.) stay preparable at all: the per-call cap only bounds
-  one request's size, never the logical size of the rehearsal - splitting the
-  transmission never splits or truncates the transaction that follows.
-- `db_rehearse_deletion_plan` runs one transactional rehearsal over
-  everything staged for a snapshot (it takes no actions of its own), inside a
-  transaction it always rolls back, so rehearsal can never mutate the
-  snapshot, let alone real ShopKart data. If the staged order hits a
-  foreign-key violation, it retries once in the known leaf-to-root order and
-  reports both attempts. Consumes what was staged either way.
-- `db_delete_snapshot` removes a snapshot file. The agent calls this
-  immediately after each account's rehearsal finishes, whether it passed or
-  failed, so the exported PII copy never outlives the rehearsal it existed
-  for.
-
-The agent's `prepare()` calls export, stage (in `STAGE_CHUNK_SIZE`-sized
-chunks), rehearse, and delete for every discovered account right after
-`plan_create`, and refuses to return a plan for approval if rehearsal never
-succeeds. In the seeded fixture this
-exercises a real foreign-key failure and its auto-order retry: findings (and
-therefore the plan's action order) record an account's orders before their
-order items and refunds, so the first rehearsal attempt fails with `FOREIGN
-KEY constraint failed` on an `order` row, and the canonical-order retry
-succeeds. `src/postgres-executor.js` always deletes in its own fixed
-leaf-to-root table order regardless of a plan's action order, so this
-particular ordering mismatch can never itself reach real execution.
-Rehearsal's actual safety value is proving, before any human ever approves a
-plan, that every planned record still exists and every dependency resolves
-cleanly against a foreign-key-enforced copy of the data - the same "record
-not found" failure the real executor would otherwise only catch mid-deletion.
