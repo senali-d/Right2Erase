@@ -52,7 +52,7 @@ function rowsResponder(overrides = {}) {
     db_list_support_tickets: async () => empty,
     db_search_uploads: async () => empty,
     storage_list_objects: async () => emptyObjects,
-    db_search_event_log: async () => empty,
+    db_search_event_log: async () => ({ count: 0, event_ids: [], sample: [] }),
     storage_search_objects: async () => emptyObjects,
     finding_add: async () => ({ ok: true }),
     case_complete_discovery: async () => ({ ok: true }),
@@ -207,9 +207,7 @@ test('historical emails beyond 100 are batched into multiple db_search_event_log
       eventLogCalls.push(args);
       // Each batch returns one row unique to it plus a row shared by IP across
       // every batch, mimicking the OR'd IP condition in the real query.
-      const uniqueRow = { id: `unique-${eventLogCalls.length}`, email: args.emails[0] };
-      const sharedRow = { id: 'shared-ip-row', ip_address: '10.0.0.1' };
-      return { rows: [uniqueRow, sharedRow] };
+      return { count: 2, event_ids: [`unique-${eventLogCalls.length}`, 'shared-ip-row'], sample: [] };
     },
     finding_add: async (args) => {
       findings.push(args);
@@ -245,7 +243,7 @@ test('db_search_event_log batches run one at a time, never concurrently', async 
       // Yield so a buggy Promise.all-based implementation would overlap calls.
       await new Promise((resolve) => setTimeout(resolve, 0));
       inFlight -= 1;
-      return { rows: [] };
+      return { count: 0, event_ids: [], sample: [] };
     },
   });
 
@@ -285,7 +283,7 @@ test('a truncated db_get_account_emails page with no next_cursor refuses to plan
     // A well-behaved server always pairs truncated:true with a next_cursor;
     // this simulates a broken one to exercise the pagination safety net.
     db_get_account_emails: async () => ({ rows: [], truncated: true, limit: 500, next_cursor: null }),
-    db_search_event_log: async () => { calls.push('db_search_event_log'); return { rows: [] }; },
+    db_search_event_log: async () => { calls.push('db_search_event_log'); return { count: 0, event_ids: [], sample: [] }; },
     case_complete_discovery: async () => { calls.push('case_complete_discovery'); return { ok: true }; },
   });
 

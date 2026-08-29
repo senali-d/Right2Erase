@@ -104,6 +104,11 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
         case_id: caseId, system: 'postgres', record_type, record_id: row.id, metadata: { row }, disposition,
       })),
     );
+    const addIdFindings = (recordIds, record_type, disposition = 'erase') => Promise.all(
+      recordIds.map((record_id) => call('finding_add', {
+        case_id: caseId, system: 'postgres', record_type, record_id, metadata: {}, disposition,
+      })),
+    );
 
     // MinIO objects are keyed by account-ID path (uploads/acct_<id>/), not by
     // email, so per-account prefix listings and the email search are separate
@@ -192,15 +197,19 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
       // connection pool. The IP condition is OR'd server-side, so passing it
       // on every batch would return the same IP-matched rows in each
       // response; scope it to the first batch and dedupe below regardless.
-      const eventRows = new Map();
+      const eventIds = new Set();
       for (const [index, batch] of emailBatches.entries()) {
         const response = await call('db_search_event_log', {
           emails: batch,
           ip_address: index === 0 ? (account.last_seen_ip || undefined) : undefined,
         });
-        for (const row of rowsOf(response)) eventRows.set(row.id, row);
+        for (const id of response?.event_ids || []) eventIds.add(id);
       }
-      const logs = [...eventRows.values()];
+      // Ids only: db_search_event_log deliberately does not return hundreds of
+      // full log rows, so event findings carry no metadata.row. The row itself
+      // adds nothing an audit needs that the id and record_type do not already
+      // give, and it is what made the response too large to stay in context.
+      const logs = [...eventIds];
 
       // Every deletable row becomes its own finding so plan_create can turn it
       // into an executable leaf-to-root action; retained refunds are recorded
@@ -213,7 +222,7 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
         addRowFindings(rowsOf(retainedRefunds), 'retained_refund', 'retain'),
         addRowFindings(rowsOf(tickets), 'support_ticket'),
         addRowFindings(rowsOf(uploads), 'upload'),
-        addRowFindings(rowsOf(logs), 'event'),
+        addIdFindings(logs, 'event'),
       ]);
       await call('finding_add', { case_id: caseId, system: 'postgres', record_type: 'account', record_id: accountId, metadata: { account }, disposition: 'erase' });
 
@@ -224,7 +233,7 @@ export function createTrueForgeAgent({ callTool, requestApproval = async () => f
         ...rowsOf(refunds).map((row) => ({ record_type: 'refund', record_id: row.id })),
         ...rowsOf(tickets).map((row) => ({ record_type: 'support_ticket', record_id: row.id })),
         ...rowsOf(uploads).map((row) => ({ record_type: 'upload', record_id: row.id })),
-        ...logs.map((row) => ({ record_type: 'event', record_id: row.id })),
+        ...logs.map((id) => ({ record_type: 'event', record_id: id })),
         { record_type: 'account', record_id: accountId },
       ];
     }

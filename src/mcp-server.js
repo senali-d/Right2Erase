@@ -149,13 +149,30 @@ export function createServer({ interfaces = defaultExecutionInterfaces } = {}) {
   }, async ({ case_id, ...value }) => text(addFinding(case_id, value)));
 
   server.registerTool('finding_add_many', {
-    description: 'Record many discovered records in one call. Prefer this over repeated finding_add: a real subject has hundreds of records, and recording a whole query result in one call is how an investigation stays exhaustive. All findings are inserted in a single transaction, so the batch either lands whole or not at all. Terminal cases cannot be mutated.',
+    description: 'Record many discovered records in one call. Prefer this over repeated finding_add: a real subject has hundreds of records, and recording a whole query result in one call is how an investigation stays exhaustive. All findings are inserted in a single transaction, so the batch either lands whole or not at all. Terminal cases cannot be mutated.\n\nTwo forms. Use record_ids with a shared system/record_type/disposition when a whole result set is the same kind of record - hundreds of event-log ids, for example - so the batch is a list of ids rather than a list of repeated objects. Use findings when the rows differ or when each needs its own metadata. Supply exactly one of the two.',
     inputSchema: {
       case_id: caseId,
-      findings: z.array(z.object(finding)).min(1).max(2000),
+      findings: z.array(z.object(finding)).min(1).max(2000).optional()
+        .describe('Full findings, one object per record. Use when the records differ or carry metadata.'),
+      record_ids: z.array(z.union([z.string(), z.number()])).min(1).max(2000).optional()
+        .describe('Compact form: many record ids that share one system, record_type, and disposition. Requires system and record_type.'),
+      system: finding.system.optional().describe('System for every id in record_ids.'),
+      record_type: finding.record_type.optional().describe('Record type for every id in record_ids.'),
+      disposition: finding.disposition.describe('Disposition for every id in record_ids. erase by default.'),
     },
     annotations: write,
-  }, async ({ case_id, findings }) => text(addFindings(case_id, findings)));
+  }, async ({
+    case_id, findings, record_ids, system, record_type, disposition,
+  }) => {
+    if ((findings == null) === (record_ids == null)) {
+      throw new Error('pass exactly one of findings or record_ids');
+    }
+    const batch = findings ?? (() => {
+      if (!system || !record_type) throw new Error('record_ids requires system and record_type');
+      return record_ids.map((record_id) => ({ system, record_type, record_id, disposition }));
+    })();
+    return text(addFindings(case_id, batch));
+  });
 
   server.registerTool('case_complete_discovery', {
     description: 'Mark discovery complete for a case. Call this only after every discovery finding for the case has been recorded; plan_create refuses to build a plan until this has been called for the case\'s current findings, so an investigation that aborts partway (for example on a truncated storage query) can never be planned or executed from its partial findings.',
