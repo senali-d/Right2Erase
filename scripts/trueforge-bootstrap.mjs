@@ -40,6 +40,52 @@ async function send(method, path, body) {
   return text ? JSON.parse(text) : null;
 }
 
+/**
+ * Resolve one model entry: its upstream id and the properties that go with it.
+ *
+ * The two must come from the same entry. A model's TrueForge name and its
+ * provider id are different strings - `gpt-5-5` is the label, `gpt-5.5` is what
+ * OpenAI answers to - so pairing an id from one source with properties matched
+ * by name from another can describe a model that does not exist. Returning them
+ * together is what makes that impossible.
+ *
+ * An explicit OPENAI_MODEL_ID identifies a model by its upstream id, so it is
+ * matched strictly against `model_id`; a name-only lookup would otherwise be
+ * free to return a different model whose label happened to match first.
+ */
+async function resolveModel(providerType, { name, modelId, configured }) {
+  const pick = (entry) => (entry ? { modelId: entry.model_id, properties: entry.properties } : null);
+
+  // The catalog is consulted first, even when an entry is already configured.
+  // It is the provider's own statement of what a model is called upstream, so
+  // deferring to whatever happens to be stored would let one bad write persist
+  // through every later run - which is exactly how `gpt-5-5` ended up recorded
+  // as its own model id. A configured entry is the fallback, for models the
+  // catalog does not list; OPENAI_MODEL_ID is the way to override deliberately.
+  let catalogModels = [];
+  try {
+    const response = await fetch(`${BASE}/api/v1/catalogs/model-providers`);
+    if (response.ok) {
+      const catalog = await response.json();
+      catalogModels = (catalog.data || []).find((entry) => entry.type === providerType)?.models || [];
+    }
+  } catch {
+    // Falls through to the configured entry, or to no match at all.
+  }
+
+  const match = modelId
+    ? catalogModels.find((entry) => entry.model_id === modelId)
+    : catalogModels.find((entry) => entry.name === name);
+  if (match) return pick(match);
+
+  // Nothing in the catalog. An explicitly requested id can still be honoured if
+  // the provider already has an entry for exactly that id.
+  if (modelId) {
+    return configured?.model_id === modelId && configured?.properties ? pick(configured) : null;
+  }
+  return pick(configured?.model_id && configured?.properties ? configured : null);
+}
+
 export async function bootstrap() {
   // Fail with a usable message rather than a bare ECONNREFUSED stack.
   try {
@@ -85,32 +131,68 @@ export async function bootstrap() {
 
   let providers = await listProviders();
 
-  // Register the agent's model only when it is missing. The endpoint replaces a
-  // provider wholesale, so an unconditional write would silently drop any other
-  // models already configured - and re-sending the redacted key the API returns
-  // is not something to risk against a working credential. Merging into the
-  // existing model list keeps a hand-configured TrueForge intact.
-  if (!names(providers).includes(model) && providerType === 'openai') {
-    if (!process.env.OPENAI_API_KEY) {
-      console.warn(`\nWARNING: model ${model} is not configured, and OPENAI_API_KEY is not set.`);
-      console.warn(`Configured: ${names(providers).join(', ') || '(none)'}`);
-      console.warn('Put OPENAI_API_KEY in .env and re-run with --env-file=.env,');
-      console.warn(`or add the model under Settings -> Models at ${BASE}.`);
-    } else {
-      const existing = providers.find((provider) => provider.name === 'openai');
-      const keep = (existing?.manifest.models || []).filter((entry) => entry.name !== modelName);
-      await send('PUT', '/api/v1/settings/model-providers', {
-        manifest: {
-          type: 'openai',
-          auth: { api_key: process.env.OPENAI_API_KEY },
-          models: [...keep, { name: modelName, model_id: process.env.OPENAI_MODEL_ID || modelName }],
-        },
-      });
-      providers = await listProviders();
-      console.log(`model provider: openai (${modelName}${keep.length ? `, kept ${keep.length} existing` : ''})`);
+  // A key in the environment is authoritative: it is written every time, so
+  // .env can rotate a credential and not merely create one. That matters
+  // because otherwise a stale key configured through the TrueForge UI could
+  // only ever be replaced through that same UI.
+  //
+  // The endpoint replaces a provider wholesale, so the existing model list is
+  // read back and merged rather than overwritten - rotating a key must not
+  // silently delete models someone configured by hand. When no key is present
+  // nothing is written at all: re-sending the redacted key the API hands back
+  // is not worth risking against a working credential.
+  if (providerType === 'openai' && process.env.OPENAI_API_KEY) {
+    const existing = providers.find((provider) => provider.name === 'openai');
+    const keep = (existing?.manifest.models || []).filter((entry) => entry.name !== modelName);
+
+    // Every model entry must carry `properties` - context length, output cap,
+    // reasoning efforts - or the write is rejected. The upstream id and those
+    // properties are resolved together from one entry, never assembled from
+    // two: the name is TrueForge's label and the id is what the provider
+    // answers to, so defaulting one to the other writes a model that does not
+    // exist upstream.
+    const resolved = await resolveModel('openai', {
+      name: modelName,
+      modelId: process.env.OPENAI_MODEL_ID,
+      configured: (existing?.manifest.models || []).find((entry) => entry.name === modelName),
+    });
+    if (!resolved) {
+      throw new Error(
+        `cannot resolve ${model}: ${process.env.OPENAI_MODEL_ID
+          ? `OPENAI_MODEL_ID="${process.env.OPENAI_MODEL_ID}" is not in TrueForge's model catalog`
+          : `no catalog entry named "${modelName}" and none configured`}`,
+      );
     }
+
+    // model_ids are unique within a provider, so pointing this name at an id
+    // another entry already claims is a conflict the write would reject with a
+    // message that does not say what to do about it. Two names for one upstream
+    // model is not something to resolve by quietly dropping the other entry.
+    const clash = keep.find((entry) => entry.model_id === resolved.modelId);
+    if (clash) {
+      throw new Error(
+        `model id "${resolved.modelId}" is already configured as "${clash.name}". `
+        + `Point the agent at openai/${clash.name} in agent/oubliette-agent.json `
+        + 'rather than aliasing the same model under a second name.',
+      );
+    }
+
+    await send('PUT', '/api/v1/settings/model-providers', {
+      manifest: {
+        type: 'openai',
+        auth: { api_key: process.env.OPENAI_API_KEY },
+        models: [...keep, { name: modelName, model_id: resolved.modelId, properties: resolved.properties }],
+      },
+    });
+    providers = await listProviders();
+    console.log(`model provider: openai key set from environment (${modelName} -> ${resolved.modelId}${
+      keep.length ? `, kept ${keep.length} other model${keep.length === 1 ? '' : 's'}` : ''})`);
   } else if (names(providers).includes(model)) {
-    console.log(`model provider: ${model} already configured`);
+    console.log(`model provider: ${model} already configured in TrueForge (no OPENAI_API_KEY in environment)`);
+  } else {
+    console.warn(`\nWARNING: model ${model} is not configured, and OPENAI_API_KEY is not set.`);
+    console.warn(`Configured: ${names(providers).join(', ') || '(none)'}`);
+    console.warn('Put OPENAI_API_KEY in .env and re-run with --env-file=.env.');
   }
 
   console.log(`\nReady. Agent "${definition.name}" is available at ${BASE}.`);
