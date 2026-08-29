@@ -25,6 +25,7 @@ export function StepRail({
   steps,
   counts,
   orientation = 'vertical',
+  navigable = true,
 }: {
   steps: Record<Phase, StepState>;
   counts?: Partial<Record<Phase, number>>;
@@ -34,6 +35,12 @@ export function StepRail({
    * dropping it.
    */
   orientation?: 'vertical' | 'horizontal';
+  /**
+   * The case page has a section for every phase to scroll to; the run page
+   * (no case id yet, or a run that failed before getting one) does not, so a
+   * click there would jump nowhere. Render plain rows instead of dead buttons.
+   */
+  navigable?: boolean;
 }) {
   const horizontal = orientation === 'horizontal';
 
@@ -48,17 +55,18 @@ export function StepRail({
       {PHASES.map((phase) => {
         const state = steps[phase];
         const calls = counts?.[phase];
+        const Row = navigable ? 'button' : 'div';
         return (
           <li key={phase}>
-            <button
-              type="button"
-              onClick={() => jumpTo(phase)}
+            <Row
+              type={navigable ? 'button' : undefined}
+              onClick={navigable ? () => jumpTo(phase) : undefined}
               className={
                 horizontal
                   ? 'flex items-baseline gap-1.5'
-                  : `flex w-full items-baseline gap-2.5 rounded px-2 py-1.5 text-left hover:bg-raised ${
-                      state === 'active' ? 'bg-raised' : ''
-                    }`
+                  : `flex w-full items-baseline gap-2.5 rounded px-2 py-1.5 text-left ${
+                      navigable ? 'hover:bg-raised' : ''
+                    } ${state === 'active' ? 'bg-raised' : ''}`
               }
             >
               <span className={`${COLOR[state]} ${state === 'active' ? 'animate-pulse' : ''}`}>
@@ -78,7 +86,7 @@ export function StepRail({
               {calls && !horizontal ? (
                 <span className="ml-auto text-[10px] text-ink-faint">{calls}</span>
               ) : null}
-            </button>
+            </Row>
           </li>
         );
       })}

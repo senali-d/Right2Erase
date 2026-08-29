@@ -68,6 +68,7 @@ export default function RunPage({ params }: { params: Promise<{ runId: string }>
             counts={Object.fromEntries(
               Object.entries(run.phases).map(([phase, state]) => [phase, state.tool_calls]),
             )}
+            navigable={false}
           />
           <ToolFeed events={run.recent} total={run.tool_calls} />
         </div>
