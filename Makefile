@@ -1,4 +1,4 @@
-.PHONY: setup reset mcp-billing-http mcp-db-http mcp-storage-http test
+.PHONY: setup reset mcp-billing-http mcp-db-http mcp-storage-http
 
 setup:
 	./scripts/setup.sh
@@ -14,6 +14,3 @@ mcp-db-http:
 
 mcp-storage-http:
 	npm run mcp:storage:http
-
-test:
-	npm test

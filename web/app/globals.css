@@ -1,4 +1,4 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
 /*
  * Bound class detection to this workspace. Tailwind v4 otherwise auto-detects
@@ -40,7 +40,7 @@
   --color-verify: #3fb950;
   --color-verify-dim: #0f2e15;
 
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 }
 
 html {

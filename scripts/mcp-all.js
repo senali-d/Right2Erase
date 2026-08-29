@@ -27,7 +27,9 @@ const ports = {
 };
 const distinct = new Set(Object.values(ports));
 if (distinct.size !== Object.keys(ports).length) {
-  throw new Error(`each MCP server needs its own port, got ${JSON.stringify(ports)}`);
+  throw new Error(
+    `each MCP server needs its own port, got ${JSON.stringify(ports)}`,
+  );
 }
 process.env.MCP_PORT = ports.billing;
 process.env.MCP_DB_PORT = ports.database;
@@ -42,4 +44,7 @@ await import('../mcp/storage-server.js');
 
 const { createServer } = await import('../src/mcp-server.js');
 const { startHttpMcp } = await import('../mcp/http-transport.js');
-startHttpMcp(createServer, { name: 'oubliette', port: Number(ports.oubliette) });
+startHttpMcp(createServer, {
+  name: 'oubliette',
+  port: Number(ports.oubliette),
+});

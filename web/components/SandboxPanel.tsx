@@ -16,7 +16,13 @@ const ORDER_LABEL: Record<string, string> = {
  * green check would hide the only evidence that the plan was actually tested
  * rather than merely assembled.
  */
-function Attempt({ attempt, index }: { attempt: RehearsalAttempt; index: number }) {
+function Attempt({
+  attempt,
+  index,
+}: {
+  attempt: RehearsalAttempt;
+  index: number;
+}) {
   // The two shapes carry different keys and mean different things: steps is a
   // completed rehearsal, completed_steps is how far it got before failing.
   const steps = attempt.ok
@@ -27,11 +33,17 @@ function Attempt({ attempt, index }: { attempt: RehearsalAttempt; index: number 
       ? `failed after ${attempt.completed_steps.toLocaleString()} steps`
       : null;
   return (
-    <li className={`rounded border px-3.5 py-3 ${attempt.ok ? 'border-verify/30 bg-verify-dim/40' : 'border-danger/30 bg-danger-dim/40'}`}>
+    <li
+      className={`rounded border px-3.5 py-3 ${attempt.ok ? 'border-verify/30 bg-verify-dim/40' : 'border-danger/30 bg-danger-dim/40'}`}
+    >
       <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-        <span className={attempt.ok ? 'text-verify' : 'text-danger'}>{attempt.ok ? '✓' : '✗'}</span>
+        <span className={attempt.ok ? 'text-verify' : 'text-danger'}>
+          {attempt.ok ? '✓' : '✗'}
+        </span>
         <span className="text-ink">Attempt {index + 1}</span>
-        <span className="text-ink-faint">{ORDER_LABEL[attempt.order] ?? attempt.order}</span>
+        <span className="text-ink-faint">
+          {ORDER_LABEL[attempt.order] ?? attempt.order}
+        </span>
         <span className="ml-auto tabular-nums text-ink-dim">{steps}</span>
       </div>
       {!attempt.ok ? (
@@ -39,7 +51,8 @@ function Attempt({ attempt, index }: { attempt: RehearsalAttempt; index: number 
           <p className="text-danger">{attempt.error}</p>
           {attempt.failed_action ? (
             <p className="text-ink-faint">
-              failed on {attempt.failed_action.record_type} #{String(attempt.failed_action.record_id)}
+              failed on {attempt.failed_action.record_type} #
+              {String(attempt.failed_action.record_id)}
             </p>
           ) : null}
         </div>
@@ -74,14 +87,19 @@ export function SandboxPanel({
     <Panel
       tone={passed ? 'verify' : 'danger'}
       title="Sandbox rehearsal"
-      aside={<Badge tone={passed ? 'verify' : 'danger'}>{passed ? 'passed' : 'failed'}</Badge>}
+      aside={
+        <Badge tone={passed ? 'verify' : 'danger'}>
+          {passed ? 'passed' : 'failed'}
+        </Badge>
+      }
     >
       <div className="space-y-4">
         {rehearsal.map((entry) => (
           <div key={entry.snapshot_id}>
             <div className="mb-2 text-[11px] text-ink-faint">
               {entry.account_id != null ? `account ${entry.account_id} · ` : ''}
-              snapshot {entry.snapshot_id.slice(0, 8)}… · deleted after rehearsal
+              snapshot {entry.snapshot_id.slice(0, 8)}… · deleted after
+              rehearsal
             </div>
             <ul className="space-y-2">
               {entry.attempts.map((attempt, index) => (
@@ -95,9 +113,10 @@ export function SandboxPanel({
         {retried
           ? 'The first attempt used the plan’s own action order and hit a foreign-key violation; the agent retried in canonical leaf-to-root order and it passed. '
           : ''}
-        Every attempt ran inside a transaction that is always rolled back, against a throwaway
-        SQLite copy that enforces the same foreign keys as production. The snapshot is a full copy
-        of the subject’s data and is deleted as soon as the rehearsal finishes.
+        Every attempt ran inside a transaction that is always rolled back,
+        against a throwaway SQLite copy that enforces the same foreign keys as
+        production. The snapshot is a full copy of the subject’s data and is
+        deleted as soon as the rehearsal finishes.
       </p>
     </Panel>
   );

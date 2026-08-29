@@ -6,8 +6,12 @@ import { pathToFileURL } from 'node:url';
 import { createTrueForgeAgent, MCP_SERVERS } from './trueforge-agent.js';
 
 const serverForTool = new Map([
-  ['db_', 'database'], ['storage_', 'storage'], ['billing_', 'billing'],
-  ['case_', 'oubliette'], ['finding_', 'oubliette'], ['plan_', 'oubliette'],
+  ['db_', 'database'],
+  ['storage_', 'storage'],
+  ['billing_', 'billing'],
+  ['case_', 'oubliette'],
+  ['finding_', 'oubliette'],
+  ['plan_', 'oubliette'],
   ['oubliette_', 'oubliette'],
 ]);
 
@@ -19,14 +23,22 @@ export function parseResult(result) {
   const text = result?.content?.find((item) => item.type === 'text')?.text;
   if (result?.isError) throw new Error(text || 'MCP tool call failed');
   if (!text) return result;
-  try { return JSON.parse(text); } catch { return text; }
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
 }
 
 // A per-server override (MCP_AUTH_TOKEN_<NAME>) wins when servers are issued
 // distinct secrets; MCP_AUTH_TOKEN alone covers the common case of one shared
 // token for every server. Never logged, never placed in the connection URL.
 function tokenFor(name) {
-  return process.env[`MCP_AUTH_TOKEN_${name.toUpperCase()}`] || process.env.MCP_AUTH_TOKEN || undefined;
+  return (
+    process.env[`MCP_AUTH_TOKEN_${name.toUpperCase()}`] ||
+    process.env.MCP_AUTH_TOKEN ||
+    undefined
+  );
 }
 
 /**
@@ -51,37 +63,66 @@ function tokenFor(name) {
  * @param {(request: { case_id: string, plan_hash: string, approved_by: string }) => Promise<boolean>} [options.approval]
  * @param {(event: ToolCallEvent) => void} [options.onToolCall]
  */
-export async function createAgent({ approval = async () => false, onToolCall } = {}) {
+export async function createAgent({
+  approval = async () => false,
+  onToolCall,
+} = {}) {
   const clients = new Map();
   try {
     for (const [name, url] of Object.entries(MCP_SERVERS)) {
       const client = new Client({ name: 'trueforge-agent', version: '1.0.0' });
       clients.set(name, client);
       const token = tokenFor(name);
-      const requestInit = token ? { headers: { authorization: `Bearer ${token}` } } : undefined;
-      await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit }));
+      const requestInit = token
+        ? { headers: { authorization: `Bearer ${token}` } }
+        : undefined;
+      await client.connect(
+        new StreamableHTTPClientTransport(new URL(url), { requestInit }),
+      );
     }
   } catch (error) {
-    await Promise.allSettled([...clients.values()].map((client) => client.close()));
+    await Promise.allSettled(
+      [...clients.values()].map((client) => client.close()),
+    );
     throw error;
   }
 
   const observe = (event) => {
     if (!onToolCall) return;
-    try { onToolCall(event); } catch { /* an observer must never break the workflow */ }
+    try {
+      onToolCall(event);
+    } catch {
+      /* an observer must never break the workflow */
+    }
   };
 
   const callTool = async (name, args) => {
-    const prefix = [...serverForTool.keys()].find((value) => name.startsWith(value));
+    const prefix = [...serverForTool.keys()].find((value) =>
+      name.startsWith(value),
+    );
     const server = prefix && serverForTool.get(prefix);
     if (!server) throw new Error(`no MCP server configured for ${name}`);
     const started = Date.now();
     try {
-      const value = parseResult(await clients.get(server).callTool({ name, arguments: args }));
-      observe({ tool: name, server, ok: true, ms: Date.now() - started, result: value });
+      const value = parseResult(
+        await clients.get(server).callTool({ name, arguments: args }),
+      );
+      observe({
+        tool: name,
+        server,
+        ok: true,
+        ms: Date.now() - started,
+        result: value,
+      });
       return value;
     } catch (error) {
-      observe({ tool: name, server, ok: false, ms: Date.now() - started, error: error.message });
+      observe({
+        tool: name,
+        server,
+        ok: false,
+        ms: Date.now() - started,
+        error: error.message,
+      });
       throw error;
     }
   };
@@ -95,7 +136,10 @@ export async function createAgent({ approval = async () => false, onToolCall } =
   };
 }
 
-if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
+if (
+  process.argv[1] &&
+  pathToFileURL(process.argv[1]).href === import.meta.url
+) {
   const subject_email = process.argv[2];
   if (!subject_email) {
     console.error('Usage: node agent/create-agent.js <subject-email>');
@@ -105,7 +149,9 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     try {
       const prepared = await agent.prepare({ subject_email });
       console.log(JSON.stringify(prepared, null, 2));
-      console.error('Plan prepared. Obtain human approval, then call executeApproved().');
+      console.error(
+        'Plan prepared. Obtain human approval, then call executeApproved().',
+      );
     } finally {
       await agent.close();
     }

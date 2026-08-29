@@ -99,31 +99,105 @@ CREATE TABLE retained_refunds (
 
 // Parents before children, matching the schema's foreign keys.
 const TABLE_COLUMNS = new Map([
-  ['accounts', ['id', 'email', 'full_name', 'country', 'last_seen_ip', 'created_at']],
-  ['account_emails', ['id', 'account_id', 'email', 'is_primary', 'valid_from', 'valid_until']],
-  ['orders', ['id', 'account_id', 'order_number', 'total_cents', 'status', 'ship_address', 'created_at']],
-  ['order_items', ['id', 'order_id', 'sku', 'product_name', 'qty', 'price_cents']],
-  ['refunds', ['id', 'order_id', 'amount_cents', 'status', 'reason', 'opened_at', 'settled_at']],
-  ['support_tickets', ['id', 'account_id', 'subject', 'body', 'status', 'created_at']],
-  ['uploads', ['id', 'account_id', 'object_key', 'kind', 'bytes', 'created_at']],
-  ['event_log', ['id', 'ts', 'email', 'ip_address', 'method', 'path', 'status_code', 'user_agent']],
-  ['retained_refunds', ['id', 'source_order_number', 'amount_cents', 'reason', 'opened_at', 'retained_at']],
+  [
+    'accounts',
+    ['id', 'email', 'full_name', 'country', 'last_seen_ip', 'created_at'],
+  ],
+  [
+    'account_emails',
+    ['id', 'account_id', 'email', 'is_primary', 'valid_from', 'valid_until'],
+  ],
+  [
+    'orders',
+    [
+      'id',
+      'account_id',
+      'order_number',
+      'total_cents',
+      'status',
+      'ship_address',
+      'created_at',
+    ],
+  ],
+  [
+    'order_items',
+    ['id', 'order_id', 'sku', 'product_name', 'qty', 'price_cents'],
+  ],
+  [
+    'refunds',
+    [
+      'id',
+      'order_id',
+      'amount_cents',
+      'status',
+      'reason',
+      'opened_at',
+      'settled_at',
+    ],
+  ],
+  [
+    'support_tickets',
+    ['id', 'account_id', 'subject', 'body', 'status', 'created_at'],
+  ],
+  [
+    'uploads',
+    ['id', 'account_id', 'object_key', 'kind', 'bytes', 'created_at'],
+  ],
+  [
+    'event_log',
+    [
+      'id',
+      'ts',
+      'email',
+      'ip_address',
+      'method',
+      'path',
+      'status_code',
+      'user_agent',
+    ],
+  ],
+  [
+    'retained_refunds',
+    [
+      'id',
+      'source_order_number',
+      'amount_cents',
+      'reason',
+      'opened_at',
+      'retained_at',
+    ],
+  ],
 ]);
 
 // The same leaf -> root delete order as src/postgres-executor.js's TABLES.
 export const CANONICAL_DELETE_ORDER = [
-  'order_items', 'refunds', 'orders', 'support_tickets', 'uploads', 'account_emails', 'event_log', 'accounts',
+  'order_items',
+  'refunds',
+  'orders',
+  'support_tickets',
+  'uploads',
+  'account_emails',
+  'event_log',
+  'accounts',
 ];
 
 const RECORD_TYPE_TO_TABLE = new Map([
-  ['order_item', 'order_items'], ['order_items', 'order_items'],
-  ['refund', 'refunds'], ['refunds', 'refunds'],
-  ['order', 'orders'], ['orders', 'orders'],
-  ['support_ticket', 'support_tickets'], ['support_tickets', 'support_tickets'],
-  ['upload', 'uploads'], ['uploads', 'uploads'],
-  ['account_email', 'account_emails'], ['account_emails', 'account_emails'],
-  ['event', 'event_log'], ['event_log', 'event_log'],
-  ['account', 'accounts'], ['accounts', 'accounts'],
+  ['order_item', 'order_items'],
+  ['order_items', 'order_items'],
+  ['refund', 'refunds'],
+  ['refunds', 'refunds'],
+  ['order', 'orders'],
+  ['orders', 'orders'],
+  ['support_ticket', 'support_tickets'],
+  ['support_tickets', 'support_tickets'],
+  ['upload', 'uploads'],
+  ['uploads', 'uploads'],
+  ['account_email', 'account_emails'],
+  ['account_emails', 'account_emails'],
+  ['event', 'event_log'],
+  ['event_log', 'event_log'],
+  ['account', 'accounts'],
+  ['accounts', 'accounts'],
 ]);
 
 export function normalizeSnapshotTable(recordType) {
@@ -131,7 +205,9 @@ export function normalizeSnapshotTable(recordType) {
   return RECORD_TYPE_TO_TABLE.get(recordType.toLowerCase()) || null;
 }
 
-export function resolveSandboxDir(sandboxDir = process.env.OUBLIETTE_SANDBOX_DIR || '.oubliette/sandbox') {
+export function resolveSandboxDir(
+  sandboxDir = process.env.OUBLIETTE_SANDBOX_DIR || '.oubliette/sandbox',
+) {
   return path.resolve(sandboxDir);
 }
 
@@ -142,8 +218,14 @@ export function resolveSandboxDir(sandboxDir = process.env.OUBLIETTE_SANDBOX_DIR
  * deterministic account-<id>.db path let one export's write or delete land on
  * a snapshot another in-flight export or rehearsal was still relying on.
  */
-export function sandboxSnapshotPath(accountId, sandboxDir = resolveSandboxDir()) {
-  return path.join(resolveSandboxDir(sandboxDir), `account-${accountId}-${randomUUID()}.db`);
+export function sandboxSnapshotPath(
+  accountId,
+  sandboxDir = resolveSandboxDir(),
+) {
+  return path.join(
+    resolveSandboxDir(sandboxDir),
+    `account-${accountId}-${randomUUID()}.db`,
+  );
 }
 
 /**
@@ -167,7 +249,10 @@ export function sandboxSnapshotPath(accountId, sandboxDir = resolveSandboxDir())
  * by path, not by an already-validated file descriptor, so that residual
  * window cannot be fully closed without a different SQLite binding.
  */
-export function assertWithinSandbox(filePath, sandboxDir = resolveSandboxDir()) {
+export function assertWithinSandbox(
+  filePath,
+  sandboxDir = resolveSandboxDir(),
+) {
   const entry = fs.lstatSync(filePath, { throwIfNoEntry: false });
   if (!entry) throw new Error('snapshot not found');
   if (!entry.isFile()) throw new Error('snapshot target is not a regular file');
@@ -189,9 +274,12 @@ function coerce(value) {
 function insertRows(db, table, rows) {
   if (!rows.length) return 0;
   const columns = TABLE_COLUMNS.get(table);
-  const stmt = db.prepare(`INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`);
+  const stmt = db.prepare(
+    `INSERT INTO ${table} (${columns.join(',')}) VALUES (${columns.map(() => '?').join(',')})`,
+  );
   db.transaction((items) => {
-    for (const row of items) stmt.run(...columns.map((column) => coerce(row[column])));
+    for (const row of items)
+      stmt.run(...columns.map((column) => coerce(row[column])));
   })(rows);
   return rows.length;
 }
@@ -211,25 +299,35 @@ function insertRows(db, table, rows) {
 export function writeSubjectSnapshot({ dbPath, tables }) {
   const dir = path.dirname(dbPath);
   fs.mkdirSync(dir, { recursive: true });
-  const tempPath = path.join(dir, `.${path.basename(dbPath)}.${randomUUID()}.tmp`);
+  const tempPath = path.join(
+    dir,
+    `.${path.basename(dbPath)}.${randomUUID()}.tmp`,
+  );
   let db;
   try {
     db = new Database(tempPath);
     db.pragma('foreign_keys = ON');
     db.exec(SCHEMA_SQL);
     const counts = {};
-    for (const table of TABLE_COLUMNS.keys()) counts[table] = insertRows(db, table, tables[table] || []);
+    for (const table of TABLE_COLUMNS.keys())
+      counts[table] = insertRows(db, table, tables[table] || []);
     db.close();
     db = null;
     fs.renameSync(tempPath, dbPath);
     return counts;
   } catch (error) {
     if (db) {
-      try { db.close(); } catch { /* preserve the original error */ }
+      try {
+        db.close();
+      } catch {
+        /* preserve the original error */
+      }
     }
     try {
       if (fs.existsSync(tempPath)) fs.rmSync(tempPath);
-    } catch { /* preserve the original error */ }
+    } catch {
+      /* preserve the original error */
+    }
     throw error;
   }
 }
@@ -249,11 +347,16 @@ function attemptDeleteOrder(dbPath, actions) {
     try {
       for (const action of actions) {
         const table = normalizeSnapshotTable(action.record_type);
-        if (!table) throw new Error(`unsupported record type for rehearsal: ${action.record_type}`);
+        if (!table)
+          throw new Error(
+            `unsupported record type for rehearsal: ${action.record_type}`,
+          );
         const id = String(action.record_id);
-        if (!/^\d+$/.test(id)) throw new Error(`invalid record id for rehearsal: ${id}`);
+        if (!/^\d+$/.test(id))
+          throw new Error(`invalid record id for rehearsal: ${id}`);
         const outcome = db.prepare(`DELETE FROM ${table} WHERE id = ?`).run(id);
-        if (outcome.changes !== 1) throw new Error(`record not found in snapshot: ${table}:${id}`);
+        if (outcome.changes !== 1)
+          throw new Error(`record not found in snapshot: ${table}:${id}`);
         completed += 1;
       }
       return { ok: true, steps: actions.length };
@@ -285,8 +388,11 @@ export function rehearseDeletionPlan({ dbPath, actions, autoOrder = true }) {
   attempts.push({ order: 'as_planned', ...asPlanned });
   if (asPlanned.ok || !autoOrder) return { ok: asPlanned.ok, attempts };
 
-  const canonical = [...actions].sort((a, b) => CANONICAL_DELETE_ORDER.indexOf(normalizeSnapshotTable(a.record_type))
-    - CANONICAL_DELETE_ORDER.indexOf(normalizeSnapshotTable(b.record_type)));
+  const canonical = [...actions].sort(
+    (a, b) =>
+      CANONICAL_DELETE_ORDER.indexOf(normalizeSnapshotTable(a.record_type)) -
+      CANONICAL_DELETE_ORDER.indexOf(normalizeSnapshotTable(b.record_type)),
+  );
   const reordered = attemptDeleteOrder(dbPath, canonical);
   attempts.push({ order: 'canonical_leaf_to_root', ...reordered });
   return { ok: reordered.ok, attempts };

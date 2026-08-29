@@ -1,6 +1,11 @@
 import { NextResponse } from 'next/server';
 import { caseGet, recordApproval } from '@/lib/mcp';
-import { approveRun, claimApproval, pausedRunFor, releaseApproval } from '@/lib/engine';
+import {
+  approveRun,
+  claimApproval,
+  pausedRunFor,
+  releaseApproval,
+} from '@/lib/engine';
 import type { ApprovalRequest } from '@/lib/run-store';
 
 export const runtime = 'nodejs';
@@ -17,24 +22,37 @@ export const dynamic = 'force-dynamic';
  * plan that changed after the operator looked at it cannot be executed by
  * replaying this request.
  */
-export async function POST(request: Request, { params }: { params: Promise<{ caseId: string }> }) {
+export async function POST(
+  request: Request,
+  { params }: { params: Promise<{ caseId: string }> },
+) {
   const { caseId } = await params;
 
   let body: { plan_hash?: unknown; approved_by?: unknown; run_id?: unknown };
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: 'expected a JSON body' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'expected a JSON body' },
+      { status: 400 },
+    );
   }
 
   const planHash = typeof body.plan_hash === 'string' ? body.plan_hash : '';
-  const approvedBy = typeof body.approved_by === 'string' ? body.approved_by.trim() : '';
+  const approvedBy =
+    typeof body.approved_by === 'string' ? body.approved_by.trim() : '';
   const runId = typeof body.run_id === 'string' ? body.run_id : null;
   if (!/^[0-9a-f]{64}$/.test(planHash)) {
-    return NextResponse.json({ error: 'plan_hash must be a 64-character sha256 hex digest' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'plan_hash must be a 64-character sha256 hex digest' },
+      { status: 400 },
+    );
   }
   if (!approvedBy) {
-    return NextResponse.json({ error: 'approved_by is required' }, { status: 400 });
+    return NextResponse.json(
+      { error: 'approved_by is required' },
+      { status: 400 },
+    );
   }
 
   // Fail fast with a readable message when the operator is looking at a stale
@@ -42,17 +60,31 @@ export async function POST(request: Request, { params }: { params: Promise<{ cas
   // inside Oubliette, which re-validates independently of anything sent here.
   try {
     const record = await caseGet(caseId);
-    if (!record) return NextResponse.json({ error: `case not found: ${caseId}` }, { status: 404 });
+    if (!record)
+      return NextResponse.json(
+        { error: `case not found: ${caseId}` },
+        { status: 404 },
+      );
     const latest = record.plans.at(-1);
-    if (!latest) return NextResponse.json({ error: 'case has no plan to approve' }, { status: 409 });
+    if (!latest)
+      return NextResponse.json(
+        { error: 'case has no plan to approve' },
+        { status: 409 },
+      );
     if (latest.plan_hash !== planHash) {
       return NextResponse.json(
-        { error: 'plan has changed since it was displayed; reload the case and review it again' },
+        {
+          error:
+            'plan has changed since it was displayed; reload the case and review it again',
+        },
         { status: 409 },
       );
     }
     if (record.certificate) {
-      return NextResponse.json({ error: 'this case has already been executed' }, { status: 409 });
+      return NextResponse.json(
+        { error: 'this case has already been executed' },
+        { status: 409 },
+      );
     }
   } catch (error) {
     return NextResponse.json(
@@ -74,7 +106,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ cas
     // pending call so a second POST cannot submit it again. All of that has to
     // happen before anything is written, because an approval is a record of a
     // person consenting to one specific plan.
-    if (paused) claimed = claimApproval(paused, { case_id: caseId, plan_hash: planHash });
+    if (paused)
+      claimed = claimApproval(paused, { case_id: caseId, plan_hash: planHash });
 
     // The agent is paused holding a formed call to the destructive tool, and
     // resuming runs it immediately - so the operator's identity has to be on
@@ -86,7 +119,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ cas
     // so doing it here too would write the same approval twice.
     if (paused) await recordApproval(caseId, planHash, approvedBy);
 
-    const run = approveRun(paused, claimed, { case_id: caseId, plan_hash: planHash, approved_by: approvedBy });
+    const run = approveRun(paused, claimed, {
+      case_id: caseId,
+      plan_hash: planHash,
+      approved_by: approvedBy,
+    });
     return NextResponse.json({ run_id: run.run_id }, { status: 202 });
   } catch (error) {
     // Nothing was started, so hand the claim back and let the operator retry.

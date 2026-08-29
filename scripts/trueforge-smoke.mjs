@@ -15,7 +15,9 @@ const client = new TrueForge({
   timeoutInSeconds: 900,
 });
 
-const { data: session } = await client.sessions.create({ agent: { name: 'oubliette-erasure' } });
+const { data: session } = await client.sessions.create({
+  agent: { name: 'oubliette-erasure' },
+});
 console.log(`session ${session.id}\nsubject ${subject}\n`);
 
 const counts = new Map();
@@ -23,7 +25,12 @@ let approvalRequired = null;
 let caseId = null;
 
 const stream = await client.sessions.createTurnStream(session.id, {
-  input: [{ type: 'user.message', content: `Handle a right-to-erasure request for ${subject}.` }],
+  input: [
+    {
+      type: 'user.message',
+      content: `Handle a right-to-erasure request for ${subject}.`,
+    },
+  ],
 });
 
 for await (const { data: event } of stream.withMetadata()) {
@@ -31,12 +38,15 @@ for await (const { data: event } of stream.withMetadata()) {
     for (const call of event.toolCalls) {
       const name = call.toolInfo?.name ?? 'unknown';
       counts.set(name, (counts.get(name) || 0) + 1);
-      process.stdout.write(`\r${[...counts.values()].reduce((a, b) => a + b, 0)} tool calls  (latest: ${name})          `);
+      process.stdout.write(
+        `\r${[...counts.values()].reduce((a, b) => a + b, 0)} tool calls  (latest: ${name})          `,
+      );
       if (name === 'case_create') caseId = call.id;
     }
   }
   if (event.type === 'tool.approval_required') approvalRequired = event;
-  if (event.type === 'turn.done') console.log(`\n\nturn: ${event.state.status}`);
+  if (event.type === 'turn.done')
+    console.log(`\n\nturn: ${event.state.status}`);
 }
 
 console.log('\ntool calls by name:');
@@ -45,9 +55,13 @@ for (const [name, n] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
 }
 
 if (approvalRequired) {
-  console.log('\nPAUSED FOR APPROVAL — the agent reached the gate and stopped.');
+  console.log(
+    '\nPAUSED FOR APPROVAL — the agent reached the gate and stopped.',
+  );
   console.log(`  pending tool calls: ${approvalRequired.toolCalls.length}`);
 } else {
-  console.log('\nNo approval was requested. Either the run failed before the gate, or it never planned an erasure.');
+  console.log(
+    '\nNo approval was requested. Either the run failed before the gate, or it never planned an erasure.',
+  );
 }
 if (caseId) console.log(`\ncase_create was called (tool call ${caseId}).`);

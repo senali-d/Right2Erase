@@ -4,8 +4,7 @@ A safety-first, multi-system erasure demo. ShopKart is a deterministic fake comp
 
 ## Running the app
 
-Requirements: Docker and Node.js 22.18+ (`npm test` runs a TypeScript test file
-directly, which needs Node's built-in type stripping).
+Requirements: Docker and Node.js 22.18+.
 
 ```bash
 ./scripts/setup.sh   # installs deps, starts Docker services, seeds ShopKart
@@ -28,13 +27,13 @@ seeds the fixture data.
 `npm run dev` runs `scripts/dev-all.sh`, which starts five Node processes in one
 terminal and shuts all of them down together if any one exits:
 
-| Process | Port |
-| --- | --- |
-| Billing MCP adapter | 4011 |
+| Process                       | Port |
+| ----------------------------- | ---- |
+| Billing MCP adapter           | 4011 |
 | ShopKart database MCP adapter | 4012 |
-| ShopKart storage MCP adapter | 4013 |
+| ShopKart storage MCP adapter  | 4013 |
 | Oubliette case management MCP | 4014 |
-| Control center (Next.js) | 3000 |
+| Control center (Next.js)      | 3000 |
 
 All four MCP servers bind to `127.0.0.1`, so no `MCP_AUTH_TOKEN` is needed
 locally. The browser never calls them directly; the Next.js server does.
@@ -78,8 +77,8 @@ npm run truth -- --diff plan.json
 The control center shows the same comparison in its verification panel, so this
 is the terminal equivalent of that screen.
 
-Other useful scripts: `npm test` runs the full suite, `npm run web:build`
-produces a production build, and `npm run reset` re-seeds ShopKart only.
+Other useful scripts: `npm run web:build` produces a production build, and
+`npm run reset` re-seeds ShopKart only.
 
 ### Fixture size
 
@@ -92,7 +91,7 @@ way. The difference is cost: every record the subject owns becomes a finding the
 agent has to read, stage, rehearse and delete, so `small` is much cheaper to
 iterate against — a ~25-action plan rather than a 444-action one.
 
-Shrinking the *background* alone does almost nothing, which is worth knowing
+Shrinking the _background_ alone does almost nothing, which is worth knowing
 before reaching for `SEED_ACCOUNTS`: at 20 background accounts the plan is still
 exactly 444 deletions, because none of the subject's data comes from that loop.
 See `fixture/README.md` for the full comparison.
@@ -145,7 +144,7 @@ trail - cases, plans, approvals, and the immutable erasure certificates. It
 survives redeploys. ShopKart itself is reseeded on every boot, which is both
 free (the seed is deterministic, so the data comes back identical) and necessary
 (the billing API keeps its customers in memory and only the seed populates it).
-The rehearsal sandbox is deliberately *not* on the volume: those files are
+The rehearsal sandbox is deliberately _not_ on the volume: those files are
 complete copies of a subject's personal data, and a crash should leave them on a
 disk that dies with the container.
 
@@ -320,9 +319,9 @@ them:
   one call per row is how an investigation runs out of patience and stops
   early.
 
-`src/db.test.js`, `src/mcp-server.test.js`, and `mcp/database-server.test.js`
-drive these directly, with no agent involved: they are the proof that safety
-does not depend on the model behaving well.
+These are enforced in the server code itself (`src/db.js`, `src/mcp-server.js`,
+`mcp/database-server.js`), independent of the agent: safety does not depend on
+the model behaving well.
 
 ## TrueForge agent (deterministic engine)
 

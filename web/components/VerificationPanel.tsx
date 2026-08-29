@@ -6,7 +6,13 @@ export type TruthReport = {
   subject_email: string;
   rows: { key: string; expected: number; found: number; ok: boolean }[];
   unexpected_keys: string[];
-  withheld: { expected: number; found: number; missing: string[]; unexpected: string[]; ok: boolean };
+  withheld: {
+    expected: number;
+    found: number;
+    missing: string[];
+    unexpected: string[];
+    ok: boolean;
+  };
   must_not_touch: { id: number; email: string; swept: boolean }[];
   /** Set when the subject's rows are already gone, so this is the cached pre-execution report. */
   post_execution?: boolean;
@@ -44,24 +50,38 @@ export function VerificationPanel({ truth }: { truth: TruthReport }) {
           {truth.rows.map((row) => (
             <tr key={row.key} className="border-t border-line">
               <td className="py-1.5">
-                <span className={row.ok ? 'text-verify' : 'text-danger'}>{row.ok ? '✓' : '✗'}</span>
-                <span className="ml-2 text-ink">{row.key.replace(/_/g, ' ')}</span>
+                <span className={row.ok ? 'text-verify' : 'text-danger'}>
+                  {row.ok ? '✓' : '✗'}
+                </span>
+                <span className="ml-2 text-ink">
+                  {row.key.replace(/_/g, ' ')}
+                </span>
               </td>
-              <td className="py-1.5 text-right tabular-nums text-ink-dim">{row.expected}</td>
-              <td className={`py-1.5 text-right tabular-nums ${row.ok ? 'text-ink' : 'text-danger'}`}>
+              <td className="py-1.5 text-right tabular-nums text-ink-dim">
+                {row.expected}
+              </td>
+              <td
+                className={`py-1.5 text-right tabular-nums ${row.ok ? 'text-ink' : 'text-danger'}`}
+              >
                 {row.found}
               </td>
             </tr>
           ))}
           <tr className="border-t border-line">
             <td className="py-1.5">
-              <span className={truth.withheld.ok ? 'text-verify' : 'text-danger'}>
+              <span
+                className={truth.withheld.ok ? 'text-verify' : 'text-danger'}
+              >
                 {truth.withheld.ok ? '✓' : '✗'}
               </span>
               <span className="ml-2 text-hold">withheld records</span>
             </td>
-            <td className="py-1.5 text-right tabular-nums text-ink-dim">{truth.withheld.expected}</td>
-            <td className="py-1.5 text-right tabular-nums text-ink">{truth.withheld.found}</td>
+            <td className="py-1.5 text-right tabular-nums text-ink-dim">
+              {truth.withheld.expected}
+            </td>
+            <td className="py-1.5 text-right tabular-nums text-ink">
+              {truth.withheld.found}
+            </td>
           </tr>
         </tbody>
       </table>
@@ -85,22 +105,28 @@ export function VerificationPanel({ truth }: { truth: TruthReport }) {
                 </span>
                 <span className="text-ink">{account.email}</span>
                 <span className="text-ink-faint">account {account.id}</span>
-                <span className={`ml-auto ${account.swept ? 'text-danger' : 'text-ink-dim'}`}>
-                  {account.swept ? 'SWEPT UP - unrelated person in the plan' : 'untouched'}
+                <span
+                  className={`ml-auto ${account.swept ? 'text-danger' : 'text-ink-dim'}`}
+                >
+                  {account.swept
+                    ? 'SWEPT UP - unrelated person in the plan'
+                    : 'untouched'}
                 </span>
               </li>
             ))}
           </ul>
           <p className="mt-2 text-[11px] leading-relaxed text-ink-faint">
-            This account shares the subject’s display name. It must never appear in the plan.
+            This account shares the subject’s display name. It must never appear
+            in the plan.
           </p>
         </div>
       ) : null}
 
       {truth.post_execution ? (
         <p className="mt-4 border-t border-line pt-3 text-[11px] leading-relaxed text-ink-faint">
-          Computed before execution. The subject’s rows no longer exist in PostgreSQL, so ground
-          truth cannot be recomputed - that absence is itself the erasure taking effect.
+          Computed before execution. The subject’s rows no longer exist in
+          PostgreSQL, so ground truth cannot be recomputed - that absence is
+          itself the erasure taking effect.
         </p>
       ) : null}
     </Panel>

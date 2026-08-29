@@ -11,8 +11,10 @@ export function createSandboxMinioClient({
   accessKey = process.env.MINIO_ACCESS_KEY || 'shopkart',
   secretKey = process.env.MINIO_SECRET_KEY || 'shopkart123',
 } = {}) {
-  if (process.env.NODE_ENV === 'production') throw new Error('MinIO deletion client is sandbox-only');
-  if (!LOCAL_HOSTS.has(endPoint)) throw new Error('refusing non-local MinIO target');
+  if (process.env.NODE_ENV === 'production')
+    throw new Error('MinIO deletion client is sandbox-only');
+  if (!LOCAL_HOSTS.has(endPoint))
+    throw new Error('refusing non-local MinIO target');
   return new Minio.Client({ endPoint, port, useSSL, accessKey, secretKey });
 }
 
@@ -35,14 +37,26 @@ export async function executeSandboxMinioDeletion({
   objects: requestedObjects,
   objectKeys,
 }) {
-  validateExecution({ plan, planHash, approval, postgresPhase, client, bucket, objects: requestedObjects, objectKeys });
+  validateExecution({
+    plan,
+    planHash,
+    approval,
+    postgresPhase,
+    client,
+    bucket,
+    objects: requestedObjects,
+    objectKeys,
+  });
   const objects = objectActions(plan);
-  const withheldKeys = new Set(withheld.map((item) => objectKey(item?.locator ?? item)).filter(Boolean));
+  const withheldKeys = new Set(
+    withheld.map((item) => objectKey(item?.locator ?? item)).filter(Boolean),
+  );
 
   // Validate every target before the first delete. In particular, a withheld
   // key must never result in a partial destructive execution.
   for (const object of objects) {
-    if (withheldKeys.has(object.key)) throw new Error(`refusing withheld object: ${object.key}`);
+    if (withheldKeys.has(object.key))
+      throw new Error(`refusing withheld object: ${object.key}`);
   }
 
   const results = [];
@@ -67,7 +81,16 @@ export async function executeSandboxMinioDeletion({
   };
 }
 
-function validateExecution({ plan, planHash, approval, postgresPhase, client, bucket, objects, objectKeys }) {
+function validateExecution({
+  plan,
+  planHash,
+  approval,
+  postgresPhase,
+  client,
+  bucket,
+  objects,
+  objectKeys,
+}) {
   if (objects !== undefined || objectKeys !== undefined) {
     throw new Error('object targets must come from the approved plan');
   }
@@ -77,33 +100,46 @@ function validateExecution({ plan, planHash, approval, postgresPhase, client, bu
   if (typeof planHash !== 'string' || hashPlan(plan) !== planHash) {
     throw new Error('plan hash does not match the supplied plan');
   }
-  const hasApproval = approval && approval.plan_hash === planHash
-    && (approval.approved === true || typeof approval.approved_by === 'string');
+  const hasApproval =
+    approval &&
+    approval.plan_hash === planHash &&
+    (approval.approved === true || typeof approval.approved_by === 'string');
   if (!hasApproval) throw new Error('the plan must have matching approval');
   if (!postgresPhase || postgresPhase.success !== true) {
     throw new Error('MinIO deletion requires a successful PostgreSQL phase');
   }
-  if (!client || typeof client.removeObject !== 'function') throw new Error('a MinIO client is required');
-  if (typeof bucket !== 'string' || bucket.length === 0) throw new Error('a sandbox bucket is required');
+  if (!client || typeof client.removeObject !== 'function')
+    throw new Error('a MinIO client is required');
+  if (typeof bucket !== 'string' || bucket.length === 0)
+    throw new Error('a sandbox bucket is required');
 }
 
 function objectActions(plan) {
   const seen = new Set();
-  return plan.actions.filter((action) => normalizeSystem(action?.system) === 'minio'
-    && action.disposition === 'erase').map((action) => {
-    const key = objectKey(action.locator);
-    if (!key) throw new Error('MinIO erase action must explicitly name an object key');
-    if (seen.has(key)) throw new Error(`duplicate MinIO object in plan: ${key}`);
-    seen.add(key);
-    return { key };
-  });
+  return plan.actions
+    .filter(
+      (action) =>
+        normalizeSystem(action?.system) === 'minio' &&
+        action.disposition === 'erase',
+    )
+    .map((action) => {
+      const key = objectKey(action.locator);
+      if (!key)
+        throw new Error(
+          'MinIO erase action must explicitly name an object key',
+        );
+      if (seen.has(key))
+        throw new Error(`duplicate MinIO object in plan: ${key}`);
+      seen.add(key);
+      return { key };
+    });
 }
 
 function objectKey(value) {
   if (typeof value === 'string') return value;
-  if (value && typeof value === 'object') return value.key || value.object_key || null;
+  if (value && typeof value === 'object')
+    return value.key || value.object_key || null;
   return null;
 }
 
-export const executeMinioDeletion = executeSandboxMinioDeletion;
 export { objectActions };

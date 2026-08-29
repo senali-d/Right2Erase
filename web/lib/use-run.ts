@@ -17,7 +17,10 @@ const MAX_CONSECUTIVE_FAILURES = 5;
  * Polling rather than streaming: each phase of a run lasts seconds, the run
  * record is small, and a poll survives a page refresh with no reconnect logic.
  */
-export function useRun(runId: string | null): { run: Run | null; error: string | null } {
+export function useRun(runId: string | null): {
+  run: Run | null;
+  error: string | null;
+} {
   const [run, setRun] = useState<Run | null>(null);
   const [error, setError] = useState<string | null>(null);
 

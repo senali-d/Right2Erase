@@ -10,21 +10,20 @@ import { WithheldPanel } from '@/components/WithheldPanel';
 import { SandboxPanel } from '@/components/SandboxPanel';
 import { ApprovalPanel } from '@/components/ApprovalPanel';
 import { CertificatePanel } from '@/components/CertificatePanel';
-import { VerificationPanel, type TruthReport } from '@/components/VerificationPanel';
+import {
+  VerificationPanel,
+  type TruthReport,
+} from '@/components/VerificationPanel';
 import { ToolFeed } from '@/components/ToolFeed';
 import { Badge } from '@/components/ui/Badge';
 import type { CaseView } from '@/lib/case-view';
+import { STATUS_TONE } from '@/lib/status';
 
-const STATUS_TONE = {
-  discovered: 'accent',
-  planned: 'hold',
-  approved: 'hold',
-  executing: 'accent',
-  completed: 'verify',
-  failed: 'danger',
-} as const;
-
-export default function CasePage({ params }: { params: Promise<{ caseId: string }> }) {
+export default function CasePage({
+  params,
+}: {
+  params: Promise<{ caseId: string }>;
+}) {
   const { caseId } = use(params);
   const router = useRouter();
   const runId = useSearchParams().get('run');
@@ -43,7 +42,9 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
       if (response.ok) setView(payload.view);
       else setError(payload.error ?? 'failed to load case');
     } catch {
-      setError('cannot reach the Right2Erase MCP server - is it running on :4014?');
+      setError(
+        'cannot reach the Right2Erase MCP server - is it running on :4014?',
+      );
     }
   }, [caseId]);
 
@@ -85,7 +86,11 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
         headers: { 'content-type': 'application/json' },
         // The run id lets the server resume the paused turn the agent is
         // holding, rather than starting a second run alongside it.
-        body: JSON.stringify({ plan_hash: view.plan.plan_hash, approved_by: approvedBy, run_id: runId }),
+        body: JSON.stringify({
+          plan_hash: view.plan.plan_hash,
+          approved_by: approvedBy,
+          run_id: runId,
+        }),
       });
       const payload = await response.json();
       if (!response.ok) {
@@ -103,7 +108,10 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
   if (error) {
     return (
       <main className="mx-auto max-w-2xl px-6 py-14">
-        <Link href="/" className="text-[11px] text-ink-faint hover:text-ink-dim">
+        <Link
+          href="/"
+          className="text-[11px] text-ink-faint hover:text-ink-dim"
+        >
           ← all cases
         </Link>
         <p className="mt-6 text-danger">{error}</p>
@@ -125,17 +133,25 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
   return (
     <div className="mx-auto flex max-w-6xl gap-8 px-6 py-10">
       <aside className="sticky top-10 hidden h-fit w-52 shrink-0 lg:block">
-        <Link href="/" className="text-[11px] text-ink-faint hover:text-ink-dim">
+        <Link
+          href="/"
+          className="text-[11px] text-ink-faint hover:text-ink-dim"
+        >
           ← all cases
         </Link>
-        <h1 className="mt-4 text-sm font-semibold tracking-[0.2em] text-ink">RIGHT2ERASE</h1>
+        <h1 className="mt-4 text-sm font-semibold tracking-[0.2em] text-ink">
+          RIGHT2ERASE
+        </h1>
         <div className="mt-6">
           <StepRail
             steps={view.steps}
             counts={
               run
                 ? Object.fromEntries(
-                    Object.entries(run.phases).map(([phase, state]) => [phase, state.tool_calls]),
+                    Object.entries(run.phases).map(([phase, state]) => [
+                      phase,
+                      state.tool_calls,
+                    ]),
                   )
                 : undefined
             }
@@ -162,7 +178,9 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
             <Badge tone={STATUS_TONE[view.status] ?? 'neutral'}>
               {running ? `${view.status} · working` : view.status}
             </Badge>
-            <code className="text-[11px] text-ink-faint">{view.case_id.slice(0, 8)}</code>
+            <code className="text-[11px] text-ink-faint">
+              {view.case_id.slice(0, 8)}
+            </code>
           </div>
         </header>
 
@@ -171,7 +189,10 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
         </div>
 
         <div id="phase-discovery">
-          <SystemCards systems={view.systems} investigated={view.discovery_complete} />
+          <SystemCards
+            systems={view.systems}
+            investigated={view.discovery_complete}
+          />
         </div>
 
         <div id="phase-planning">
@@ -179,7 +200,10 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
         </div>
 
         <div id="phase-sandbox">
-          <SandboxPanel rehearsal={run?.rehearsal} running={running && !run?.rehearsal} />
+          <SandboxPanel
+            rehearsal={run?.rehearsal}
+            running={running && !run?.rehearsal}
+          />
         </div>
 
         <div id="phase-approval" className="space-y-6">
@@ -193,7 +217,12 @@ export default function CasePage({ params }: { params: Promise<{ caseId: string 
           {executed ? (
             <CertificatePanel view={view} />
           ) : (
-            <ApprovalPanel view={view} onApprove={approve} submitting={submitting || running} error={approveError} />
+            <ApprovalPanel
+              view={view}
+              onApprove={approve}
+              submitting={submitting || running}
+              error={approveError}
+            />
           )}
         </div>
 

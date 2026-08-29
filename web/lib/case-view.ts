@@ -50,7 +50,11 @@ export type CaseView = {
     withheld_count: number;
     by_system: Record<string, number>;
   } | null;
-  approval: { approved_by: string; approved_at: string; reason: string | null } | null;
+  approval: {
+    approved_by: string;
+    approved_at: string;
+    reason: string | null;
+  } | null;
   certificate: {
     plan_hash: string;
     approved_by: string;
@@ -70,7 +74,8 @@ const SYSTEM_LABELS: Record<string, { label: string; unit: string }> = {
 
 function countBySystem(actions: PlanAction[]): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const action of actions) out[action.system] = (out[action.system] || 0) + 1;
+  for (const action of actions)
+    out[action.system] = (out[action.system] || 0) + 1;
   return out;
 }
 
@@ -88,7 +93,9 @@ function sourceRow(finding: Finding): Record<string, unknown> {
   const metadata = finding.metadata as Record<string, unknown> | undefined;
   if (!metadata || typeof metadata !== 'object') return {};
   const nested = metadata.row;
-  return nested && typeof nested === 'object' ? (nested as Record<string, unknown>) : metadata;
+  return nested && typeof nested === 'object'
+    ? (nested as Record<string, unknown>)
+    : metadata;
 }
 
 /**
@@ -105,8 +112,12 @@ function toWithheld(finding: Finding): WithheldRecord {
     record_type: finding.record_type,
     record_id: String(finding.record_id),
     disposition: finding.disposition,
-    order_number: typeof row.source_order_number === 'string' ? row.source_order_number : undefined,
-    amount_cents: typeof row.amount_cents === 'number' ? row.amount_cents : undefined,
+    order_number:
+      typeof row.source_order_number === 'string'
+        ? row.source_order_number
+        : undefined,
+    amount_cents:
+      typeof row.amount_cents === 'number' ? row.amount_cents : undefined,
     reason: typeof row.reason === 'string' ? row.reason : undefined,
   };
 }
@@ -118,13 +129,25 @@ function buildSteps(record: CaseRecord): Record<Phase, StepState> {
   const hasApproval = record.approvals.length > 0;
   const hasCertificate = Boolean(record.certificate);
 
-  const discovery: StepState = record.discovery_completed_at ? 'done' : failed ? 'failed' : 'active';
-  const planning: StepState = hasPlan ? 'done' : discovery === 'done' ? 'active' : 'pending';
+  const discovery: StepState = record.discovery_completed_at
+    ? 'done'
+    : failed
+      ? 'failed'
+      : 'active';
+  const planning: StepState = hasPlan
+    ? 'done'
+    : discovery === 'done'
+      ? 'active'
+      : 'pending';
   // The sandbox rehearsal is not recorded in the case store - prepare() runs it
   // and refuses to return a plan that never rehearsed cleanly. So a stored plan
   // is itself the evidence that rehearsal passed.
   const sandbox: StepState = hasPlan ? 'done' : 'pending';
-  const approval: StepState = hasApproval ? 'done' : hasPlan ? 'active' : 'pending';
+  const approval: StepState = hasApproval
+    ? 'done'
+    : hasPlan
+      ? 'active'
+      : 'pending';
   const execution: StepState = hasCertificate
     ? 'done'
     : status === 'executing'
@@ -145,14 +168,17 @@ export function buildCaseView(record: CaseRecord): CaseView {
   const eraseFindings = findings.filter((f) => f.disposition === 'erase');
 
   const perSystem: Record<string, number> = {};
-  for (const finding of findings) perSystem[finding.system] = (perSystem[finding.system] || 0) + 1;
+  for (const finding of findings)
+    perSystem[finding.system] = (perSystem[finding.system] || 0) + 1;
 
-  const systems: SystemCard[] = (['postgres', 'minio', 'billing'] as const).map((key) => ({
-    key,
-    label: SYSTEM_LABELS[key].label,
-    unit: SYSTEM_LABELS[key].unit,
-    count: perSystem[key] || 0,
-  }));
+  const systems: SystemCard[] = (['postgres', 'minio', 'billing'] as const).map(
+    (key) => ({
+      key,
+      label: SYSTEM_LABELS[key].label,
+      unit: SYSTEM_LABELS[key].unit,
+      count: perSystem[key] || 0,
+    }),
+  );
   // Identity is not a storage system - it is how many addresses this person is
   // known by, which is the reason discovery has to look beyond the one email
   // that was typed in.
@@ -163,11 +189,15 @@ export function buildCaseView(record: CaseRecord): CaseView {
     count: findings.filter((f) => f.record_type === 'account_email').length,
   });
 
-  const latestPlan = record.plans?.length ? record.plans[record.plans.length - 1] : null;
+  const latestPlan = record.plans?.length
+    ? record.plans[record.plans.length - 1]
+    : null;
   const planActions = latestPlan?.body?.actions ?? [];
   const planErase = planActions.filter((a) => a.disposition === 'erase');
 
-  const latestApproval = record.approvals?.length ? record.approvals[record.approvals.length - 1] : null;
+  const latestApproval = record.approvals?.length
+    ? record.approvals[record.approvals.length - 1]
+    : null;
   const cert = record.certificate;
 
   return {
