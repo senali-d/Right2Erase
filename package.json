@@ -16,7 +16,7 @@
     "up": "docker compose up -d --wait",
     "down": "docker compose down -v",
     "seed": "npm --workspace fixture run seed",
-    "truth": "node fixture/scripts/truth.js",
+    "truth": "node --env-file-if-exists=.env fixture/scripts/truth.js",
     "reset": "npm run down && npm run up && npm run seed",
     "mcp:billing": "node mcp/billing-server.js",
     "mcp:billing:http": "MCP_TRANSPORT=http MCP_PORT=4011 node mcp/billing-server.js",
