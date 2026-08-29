@@ -64,6 +64,7 @@ reopening one without a reset is refused.
   `./scripts/demo-reset.sh` for a clean slate.
 - **Port already in use**: something from a previous run survived. Check with
   `lsof -i :3000` (or 4011-4014) and stop it.
+
 ### Verifying the agent independently
 
 `npm run truth` prints the expected manifest, derived straight from Postgres by
@@ -84,6 +85,8 @@ produces a production build, and `npm run reset` re-seeds ShopKart only.
 
 - `fixture/` - ShopKart fake services, schema, seed data, and operator-only truth checker
 - `mcp/` - agent-facing MCP adapters for the fake services
+- `agent/` - both engines: the deterministic script (`trueforge-agent.js`, `create-agent.js`) and the TrueForge agent definition (`oubliette-agent.json`)
+- `src/` - Oubliette: the case store, plans, approvals, and the sole destructive path
 - `web/` - the Data Erasure Control Center (Next.js)
 - `docs/` - architecture, capability map, and Phase 0 evidence
 
@@ -139,18 +142,19 @@ and what happened.
 
 The browser never talks to MCP. `mcp/http-transport.js` enforces an Origin
 allowlist and serves no CORS headers, so every MCP call goes through Next.js
-route handlers, which import `createAgent()` directly. The UI performs no
-deletion of its own: approving calls `agent.executeApproved()`, and Oubliette
-independently re-validates the canonical plan hash, the approving identity, and
-the case revision before any adapter runs.
+route handlers. The UI performs no deletion of its own, on either engine:
+Oubliette independently re-validates the canonical plan hash, the approving
+identity, and the case revision before any adapter runs.
 
-Live progress comes from `createAgent({ onToolCall })` - the agent has no events
-of its own, so the UI derives its six phases from the tool names passing
-through. The browser polls `/api/runs/<id>` once a second.
+Live progress is derived from tool names, since neither engine emits phases of
+its own. On the agentic engine they come off the TrueForge event stream
+(`web/lib/trueforge-runs.ts`); on the deterministic one from an `onToolCall`
+observer (`web/lib/agent-runs.ts`). `web/lib/engine.ts` chooses between them and
+the routes call only that. The browser polls `/api/runs/<id>` once a second.
 
 Two things are not in the case store and are tracked by `web/lib/run-store.ts`,
 mirrored under `.oubliette/runs/`: the live phase, and the sandbox rehearsal
-transcript, which `prepare()` returns and then discards. The rehearsal panel
+transcript. The rehearsal panel
 shows both attempts - the seeded fixture deliberately fails the first on a
 foreign-key violation and succeeds on the canonical-order retry.
 
@@ -234,8 +238,13 @@ node agent/create-agent.js customer@example.com
 The agent investigates through read-only tools, records findings, creates and
 rehearses a plan, and stops for human approval. Only an explicit approval lets
 it call `oubliette_execute_erasure`; the result includes the verification
-certificate. Server URLs and the approval policy are documented in
-`trueforge.config.json` and can be overridden with environment variables.
+certificate. Server URLs come from `MCP_SERVERS` in
+`agent/trueforge-agent.js` and can be overridden with environment variables.
+
+For the agentic engine the equivalent configuration is
+`agent/oubliette-agent.json` - the model, the instructions, which MCP servers
+are attached, and which tools require approval - applied to the harness by
+`scripts/trueforge-bootstrap.mjs`.
 
 Sandbox MinIO execution is isolated in `src/minio-executor.js`. It accepts no
 free-form object list: keys are derived only from erase actions in a hash-
