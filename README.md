@@ -182,16 +182,20 @@ set `OUBLIETTE_ENGINE` to change the default.
 ### Running the agentic engine
 
 ```bash
+cp .env.example .env                   # then put your OPENAI_API_KEY in .env
 npx @truefoundry/trueforge@latest      # the harness, on :8790
-node scripts/trueforge-bootstrap.mjs   # register the 4 MCP servers + the agent
+node --env-file=.env scripts/trueforge-bootstrap.mjs
 ```
 
-Bootstrap is idempotent, so re-run it after editing
-`agent/oubliette-agent.json`. Configuring a model provider is deliberately not
-scripted - it needs an API key, which belongs in TrueForge's own settings
-rather than in this repo. Add one under **Settings → Models** at
-<http://localhost:8790>; the agent definition names the model it wants and the
-bootstrap warns if that model is not configured.
+Bootstrap registers the four MCP servers, the agent, and - if `OPENAI_API_KEY`
+is set - the model provider, so the TrueForge UI is never required. It is
+idempotent: re-run it after editing `agent/oubliette-agent.json`.
+
+The key is read from the environment and handed to TrueForge, which keeps it in
+its own settings. Nothing in this repo writes it to disk, and `.env` is
+gitignored. If the agent's model is already configured the script leaves the
+provider untouched rather than overwriting it, so a hand-configured TrueForge
+keeps its other models.
 
 `node scripts/trueforge-smoke.mjs [email]` drives one case straight through the
 harness and prints what the agent did, without the UI in the way.

@@ -2,12 +2,16 @@
 /**
  * Register this project's MCP servers and erasure agent with a local TrueForge.
  *
- * Idempotent: both endpoints are upserts keyed by name, so re-running after an
+ * Idempotent: every endpoint is an upsert keyed by name, so re-running after an
  * edit to agent/oubliette-agent.json republishes the agent rather than failing.
- * Configuring a model provider is deliberately not automated - it needs an API
- * key, which belongs in TrueForge's own settings, not in a repo script.
  *
- *   node scripts/trueforge-bootstrap.mjs
+ *   node --env-file=.env scripts/trueforge-bootstrap.mjs
+ *
+ * The model provider is registered only when OPENAI_API_KEY is present. The key
+ * is read from the environment and sent straight to TrueForge, which stores it
+ * in its own settings - it is never written to a file in this repo, and .env is
+ * gitignored. Without the variable the script still registers the MCP servers
+ * and the agent, and tells you the provider is missing.
  */
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
@@ -72,14 +76,41 @@ export async function bootstrap() {
   }
 
   const model = definition.manifest.model.name;
-  const providers = await (await fetch(`${BASE}/api/v1/settings/model-providers`)).json();
-  const configured = (providers.data || []).flatMap(
+  const [providerType, modelName] = model.split('/');
+
+  const listProviders = async () => (await (await fetch(`${BASE}/api/v1/settings/model-providers`)).json()).data || [];
+  const names = (providers) => providers.flatMap(
     (provider) => (provider.manifest.models || []).map((entry) => `${provider.name}/${entry.name}`),
   );
-  if (!configured.includes(model)) {
-    console.warn(`\nWARNING: model ${model} is not configured in TrueForge.`);
-    console.warn(`Configured: ${configured.join(', ') || '(none)'}`);
-    console.warn(`Add it under Settings -> Models at ${BASE}, or edit agent/oubliette-agent.json.`);
+
+  let providers = await listProviders();
+
+  // Register the agent's model only when it is missing. The endpoint replaces a
+  // provider wholesale, so an unconditional write would silently drop any other
+  // models already configured - and re-sending the redacted key the API returns
+  // is not something to risk against a working credential. Merging into the
+  // existing model list keeps a hand-configured TrueForge intact.
+  if (!names(providers).includes(model) && providerType === 'openai') {
+    if (!process.env.OPENAI_API_KEY) {
+      console.warn(`\nWARNING: model ${model} is not configured, and OPENAI_API_KEY is not set.`);
+      console.warn(`Configured: ${names(providers).join(', ') || '(none)'}`);
+      console.warn('Put OPENAI_API_KEY in .env and re-run with --env-file=.env,');
+      console.warn(`or add the model under Settings -> Models at ${BASE}.`);
+    } else {
+      const existing = providers.find((provider) => provider.name === 'openai');
+      const keep = (existing?.manifest.models || []).filter((entry) => entry.name !== modelName);
+      await send('PUT', '/api/v1/settings/model-providers', {
+        manifest: {
+          type: 'openai',
+          auth: { api_key: process.env.OPENAI_API_KEY },
+          models: [...keep, { name: modelName, model_id: process.env.OPENAI_MODEL_ID || modelName }],
+        },
+      });
+      providers = await listProviders();
+      console.log(`model provider: openai (${modelName}${keep.length ? `, kept ${keep.length} existing` : ''})`);
+    }
+  } else if (names(providers).includes(model)) {
+    console.log(`model provider: ${model} already configured`);
   }
 
   console.log(`\nReady. Agent "${definition.name}" is available at ${BASE}.`);
