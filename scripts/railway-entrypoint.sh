@@ -172,14 +172,26 @@ mkdir -p "$(dirname "$OUBLIETTE_DB_PATH")" "$OUBLIETTE_RUNS_DIR" \
 # So the profile that produced the store is stamped beside it, and a change
 # retires the store rather than letting it quietly describe a world that no
 # longer exists. Same profile, nothing happens.
+#
+# SEED_ACCOUNTS is folded into the fingerprint too: it overrides the profile's
+# account count (see fixture/scripts/seed.js), so it changes seeded row
+# identities on its own, independent of SEED_PROFILE. And a store with no
+# stamp is not assumed compatible - it predates this guard, so its fixture
+# shape is unknown - so it is cleared exactly like a mismatch would be.
 profile_stamp="$(dirname "$OUBLIETTE_DB_PATH")/.seed-profile"
-if [[ -f "$profile_stamp" && "$(cat "$profile_stamp")" != "$SEED_PROFILE" ]]; then
-  echo "fixture profile changed: $(cat "$profile_stamp") -> ${SEED_PROFILE}; clearing stale cases" >&2
+fixture_fingerprint="${SEED_PROFILE}:${SEED_ACCOUNTS:-default}"
+if [[ -f "$OUBLIETTE_DB_PATH" ]] \
+  && { [[ ! -f "$profile_stamp" ]] || [[ "$(cat "$profile_stamp")" != "$fixture_fingerprint" ]]; }; then
+  if [[ -f "$profile_stamp" ]]; then
+    echo "fixture changed: $(cat "$profile_stamp") -> ${fixture_fingerprint}; clearing stale cases" >&2
+  else
+    echo "no fixture stamp for existing Oubliette state; clearing stale cases" >&2
+  fi
   rm -rf "$OUBLIETTE_DB_PATH" "${OUBLIETTE_DB_PATH}-wal" "${OUBLIETTE_DB_PATH}-shm" \
     "$OUBLIETTE_RUNS_DIR" "$OUBLIETTE_TRUTH_DIR"
   mkdir -p "$OUBLIETTE_RUNS_DIR" "$OUBLIETTE_TRUTH_DIR"
 fi
-printf '%s' "$SEED_PROFILE" > "$profile_stamp"
+printf '%s' "$fixture_fingerprint" > "$profile_stamp"
 
 # All four adapters in one process - see scripts/mcp-all.js. This is the
 # process that owns both destructive executors, so NODE_ENV is stripped rather

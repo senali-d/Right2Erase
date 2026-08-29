@@ -34,16 +34,19 @@ import { parseResult } from '../agent/create-agent.js';
  *
  * Same precedence as the other clients in this repo - a per-server
  * MCP_AUTH_TOKEN_<NAME> if one is issued, otherwise the shared token. See
- * agent/create-agent.js and web/lib/mcp.ts.
+ * agent/create-agent.js and web/lib/mcp.ts. `key` must be the adapter identity
+ * (e.g. 'database', 'storage', 'oubliette'), not the MCP client's display name
+ * - those are free text chosen per test file and never match the documented
+ * MCP_AUTH_TOKEN_<NAME> variables.
  */
-function authHeaders(name) {
-  const token = process.env[`MCP_AUTH_TOKEN_${String(name).toUpperCase()}`] || process.env.MCP_AUTH_TOKEN;
+function authHeaders(key) {
+  const token = process.env[`MCP_AUTH_TOKEN_${String(key).toUpperCase()}`] || process.env.MCP_AUTH_TOKEN;
   return token ? { headers: { authorization: `Bearer ${token}` } } : undefined;
 }
 
 /** Open a client, run `body` with it, and always give the session back. */
-export async function withClient(url, name, body) {
-  const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: authHeaders(name) });
+export async function withClient(url, name, key, body) {
+  const transport = new StreamableHTTPClientTransport(new URL(url), { requestInit: authHeaders(key) });
   const client = new Client({ name, version: '1.0.0' });
   try {
     await client.connect(transport);
@@ -57,9 +60,10 @@ export async function withClient(url, name, body) {
 }
 
 /** Call one tool over its own session, returning the parsed result. */
-export const callTool = (url, name, toolName, args) => withClient(
+export const callTool = (url, name, key, toolName, args) => withClient(
   url,
   name,
+  key,
   async (client) => parseResult(await client.callTool({ name: toolName, arguments: args })),
 );
 
@@ -71,10 +75,10 @@ const DELAY_MS = 250;
  * busy adapter must not be mistaken for an absent one. Retrying cannot make an
  * absent server present; it only stops load from silently deleting coverage.
  */
-export async function reachable(url, name) {
+export async function reachable(url, name, key) {
   for (let attempt = 1; attempt <= ATTEMPTS; attempt += 1) {
     try {
-      await withClient(url, name, () => {});
+      await withClient(url, name, key, () => {});
       return true;
     } catch (error) {
       if (attempt === ATTEMPTS) {
@@ -88,8 +92,8 @@ export async function reachable(url, name) {
 }
 
 /** Skip reason for a suite whose adapter is down, or false to run it. */
-export async function skipUnless(url, name) {
-  if (await reachable(url, name)) return false;
+export async function skipUnless(url, name, key) {
+  if (await reachable(url, name, key)) return false;
   const reason = `${name} MCP not reachable at ${url}; run npm run dev`;
   console.error(`SKIPPING suite: ${reason}`);
   return reason;

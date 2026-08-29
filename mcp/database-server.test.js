@@ -18,8 +18,8 @@ import { callTool, skipUnless } from './test-client.js';
 const DB_URL = process.env.SHOPKART_DB_MCP_URL || 'http://127.0.0.1:4012/mcp';
 
 const AGENT = 'adapter-invariant-tests';
-const skipDb = await skipUnless(DB_URL, 'shopkart-db');
-const call = (url, name, args) => callTool(url, AGENT, name, args);
+const skipDb = await skipUnless(DB_URL, 'shopkart-db', 'database');
+const call = (url, name, args) => callTool(url, AGENT, 'database', name, args);
 
 /**
  * The subject's account id, asked for rather than assumed.

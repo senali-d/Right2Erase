@@ -17,8 +17,8 @@ import { callTool, reachable, skipUnless } from './test-client.js';
 const STORAGE_URL = process.env.SHOPKART_STORAGE_MCP_URL || 'http://127.0.0.1:4013/mcp';
 
 const AGENT = 'storage-invariant-tests';
-const call = (url, name, args) => callTool(url, AGENT, name, args);
-const skipStorage = await skipUnless(STORAGE_URL, 'shopkart-storage');
+const call = (url, name, args) => callTool(url, AGENT, 'storage', name, args);
+const skipStorage = await skipUnless(STORAGE_URL, 'shopkart-storage', 'storage');
 
 test('a returned storage listing is always complete', { skip: skipStorage }, async () => {
   const all = await call(STORAGE_URL, 'storage_list_objects', { prefix: 'uploads/' });
@@ -43,7 +43,7 @@ test('storage refuses an oversized listing instead of returning a partial set', 
     const url = `http://127.0.0.1:${port}/mcp`;
     // reachable() already retries; this is the outer wait for a process that
     // has only just been spawned and may not have bound its port yet.
-    for (let i = 0; i < 10 && !(await reachable(url, AGENT)); i += 1) {
+    for (let i = 0; i < 10 && !(await reachable(url, AGENT, 'storage')); i += 1) {
       await new Promise((resolve) => { setTimeout(resolve, 100); });
     }
     await assert.rejects(
