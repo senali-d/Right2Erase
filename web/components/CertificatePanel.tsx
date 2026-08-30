@@ -1,5 +1,9 @@
+'use client';
+
+import { useState } from 'react';
 import { Panel, Field } from '@/components/ui/Panel';
 import { Badge } from '@/components/ui/Badge';
+import { RecordGroups } from '@/components/RecordGroups';
 import type { CaseView } from '@/lib/case-view';
 
 const SYSTEM_LABEL: Record<string, string> = {
@@ -10,6 +14,9 @@ const SYSTEM_LABEL: Record<string, string> = {
 
 export function CertificatePanel({ view }: { view: CaseView }) {
   const cert = view.certificate;
+  // A completed case is the state anyone reviewing this afterwards will find,
+  // so "which records?" has to be answerable here and not only at the gate.
+  const [showing, setShowing] = useState(false);
   if (!cert) return null;
 
   return (
@@ -37,6 +44,24 @@ export function CertificatePanel({ view }: { view: CaseView }) {
           </dd>
         </div>
       </dl>
+
+      {cert.actions.length > 0 ? (
+        <div className="mt-4 border-t border-line pt-4">
+          <button
+            type="button"
+            onClick={() => setShowing(!showing)}
+            aria-expanded={showing}
+            className="text-[11px] text-ink-dim underline-offset-2 hover:text-ink hover:underline"
+          >
+            {showing ? 'Hide what was deleted' : 'See exactly what was deleted'}
+          </button>
+          {showing ? (
+            <div className="mt-3">
+              <RecordGroups groups={cert.actions} showSystem />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <div className="mt-5 grid gap-4 border-t border-line pt-4 sm:grid-cols-2">
         <Field label="Approved by">{cert.approved_by}</Field>

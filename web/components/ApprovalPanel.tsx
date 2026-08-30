@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Panel } from '@/components/ui/Panel';
+import { RecordGroups } from '@/components/RecordGroups';
 import type { CaseView } from '@/lib/case-view';
 
 const SYSTEM_LABEL: Record<string, string> = {
@@ -90,44 +91,8 @@ export function ApprovalPanel({
           </button>
 
           {showingPlan ? (
-            <div className="mt-3 divide-y divide-line rounded border border-line">
-              {plan.actions.map((group) => (
-                <div key={group.record_type} className="px-3 py-2.5">
-                  <div className="flex items-baseline justify-between gap-3">
-                    <span className="text-ink">
-                      {group.record_type.replace(/_/g, ' ')}
-                      {/* The plan spans all three systems, so an uploaded
-                          file appears twice - once as its index row, once as
-                          the object. Naming the system is what tells them
-                          apart. */}
-                      <span className="ml-2 text-[10px] text-ink-faint">
-                        {SYSTEM_LABEL[group.system] ?? group.system}
-                      </span>
-                    </span>
-                    <span className="tabular-nums text-[11px] text-ink-dim">
-                      {group.count.toLocaleString()}
-                    </span>
-                  </div>
-                  <ul className="mt-1 space-y-0.5">
-                    {group.items.map((item) => (
-                      <li
-                        key={`${group.record_type}:${item.record_id}`}
-                        className="flex items-baseline gap-2 text-[11px]"
-                      >
-                        <span className="text-ink-faint">·</span>
-                        <span className="break-all text-ink-dim">
-                          {item.label}
-                        </span>
-                      </li>
-                    ))}
-                    {group.hidden > 0 ? (
-                      <li className="pl-4 text-[11px] text-ink-faint">
-                        + {group.hidden.toLocaleString()} more
-                      </li>
-                    ) : null}
-                  </ul>
-                </div>
-              ))}
+            <div className="mt-3">
+              <RecordGroups groups={plan.actions} showSystem />
             </div>
           ) : null}
         </div>

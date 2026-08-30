@@ -98,6 +98,14 @@ export type CaseView = {
     deleted_count: number;
     withheld_count: number;
     by_system: Record<string, number>;
+    /**
+     * What each adapter confirmed destroying, named and grouped.
+     *
+     * Stronger evidence than the plan: the plan is what was intended, this is
+     * what happened. It is also the state a case spends most of its life in,
+     * so "which records?" needs an answer here and not only at the gate.
+     */
+    actions: RecordGroup[];
   } | null;
   steps: Record<Phase, StepState>;
 };
@@ -366,12 +374,13 @@ export function buildCaseView(record: CaseRecord): CaseView {
   const findingByKey = new Map(
     findings.map((f) => [`${f.system}:${f.record_type}:${f.record_id}`, f]),
   );
-  const namedPlanActions = planErase.map(
-    (action) =>
-      findingByKey.get(
-        `${action.system}:${action.record_type}:${action.record_id}`,
-      ) ?? ({ ...action, metadata: undefined } as unknown as Finding),
-  );
+  const nameActions = (actions: PlanAction[]): Finding[] =>
+    actions.map(
+      (action) =>
+        findingByKey.get(
+          `${action.system}:${action.record_type}:${action.record_id}`,
+        ) ?? ({ ...action, metadata: undefined } as unknown as Finding),
+    );
 
   const latestApproval = record.approvals?.length
     ? record.approvals[record.approvals.length - 1]
@@ -402,7 +411,7 @@ export function buildCaseView(record: CaseRecord): CaseView {
           delete_count: planErase.length,
           withheld_count: planActions.length - planErase.length,
           by_system: countBySystem(planErase),
-          actions: groupFindings(namedPlanActions),
+          actions: groupFindings(nameActions(planErase)),
         }
       : null,
     approval: latestApproval
@@ -420,6 +429,7 @@ export function buildCaseView(record: CaseRecord): CaseView {
           deleted_count: cert.manifest.length,
           withheld_count: cert.withheld.length,
           by_system: countBySystem(cert.manifest),
+          actions: groupFindings(nameActions(cert.manifest)),
         }
       : null,
     steps: buildSteps(record),
