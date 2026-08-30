@@ -13,11 +13,36 @@ export type StepState = 'pending' | 'active' | 'done' | 'failed';
 
 export type SystemKey = 'postgres' | 'minio' | 'billing' | 'identity';
 
+export type RecordItem = {
+  record_id: string;
+  label: string;
+};
+
+export type RecordGroup = {
+  record_type: string;
+  count: number;
+  /** A sample, not the whole set - see ITEMS_PER_GROUP. */
+  items: RecordItem[];
+  /** How many of `count` are not in `items`. */
+  hidden: number;
+  /** Why this record type is treated differently, where that is not obvious. */
+  note?: string;
+};
+
 export type SystemCard = {
   key: SystemKey;
   label: string;
   unit: string;
   count: number;
+  /**
+   * The records behind the count, grouped by kind.
+   *
+   * A count alone is not something a human can approve. "14 records" tells an
+   * operator nothing about whether the right 14 were found, and the one panel
+   * that has always been convincing - the withheld refund - is convincing
+   * precisely because it names the record instead of counting it.
+   */
+  groups: RecordGroup[];
 };
 
 export type WithheldRecord = {
@@ -80,22 +105,36 @@ function countBySystem(actions: PlanAction[]): Record<string, number> {
 }
 
 /**
+ * Keys a recorder has been seen to nest the source row under.
+ *
+ * The deterministic script names the wrapper after the thing it found - `row`
+ * for table rows, but `account`, `customer` and `object` elsewhere - so a
+ * single `row` lookup finds the row for most record types and misses it for
+ * exactly the ones whose names matter most to a reader: the account and the
+ * billing customer, both of which would fall back to a bare id.
+ */
+const ROW_WRAPPERS = ['row', 'account', 'customer', 'object'] as const;
+
+/**
  * The source row behind a finding, whichever way the recorder shaped it.
  *
  * finding_add documents metadata as "the source row", so an agent reading that
  * literally sends the row's own columns, while the deterministic script nests
- * it as { row }. Both are fair readings and the recorder is a language model,
- * so the panel accepts either rather than losing the retention reason to a
- * nesting choice. Wrapped form wins when present, so a row with its own `row`
- * column is not mistaken for the wrapper.
+ * it. Both are fair readings and the recorder is a language model, so this
+ * accepts either rather than losing a record's name to a nesting choice. A
+ * wrapper wins when present, so a flat row carrying its own `row` column is
+ * not mistaken for one.
  */
 function sourceRow(finding: Finding): Record<string, unknown> {
   const metadata = finding.metadata as Record<string, unknown> | undefined;
   if (!metadata || typeof metadata !== 'object') return {};
-  const nested = metadata.row;
-  return nested && typeof nested === 'object'
-    ? (nested as Record<string, unknown>)
-    : metadata;
+  for (const key of ROW_WRAPPERS) {
+    const nested = metadata[key];
+    if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
+      return nested as Record<string, unknown>;
+    }
+  }
+  return metadata;
 }
 
 /**
@@ -162,6 +201,107 @@ function buildSteps(record: CaseRecord): Record<Phase, StepState> {
   return { discovery, planning, sandbox, approval, execution, certificate };
 }
 
+/**
+ * How many records of one kind to name before summarising the rest.
+ *
+ * A subject's event log runs to hundreds of rows on the full fixture, and
+ * listing every id would bury the handful of records an operator can actually
+ * reason about. The cap is a display decision only: the counts beside each
+ * group are the real totals, and the ground-truth panel checks those.
+ */
+const ITEMS_PER_GROUP = 8;
+
+const str = (value: unknown): string | undefined =>
+  typeof value === 'string' && value.trim() ? value : undefined;
+
+/**
+ * How one record is described to a human.
+ *
+ * Findings carry the source row, so a record can be named the way the business
+ * names it - order SK-08004, not order 4 - which is the difference between a
+ * list an operator skims and one they can actually check against the systems.
+ * Every branch falls back to the id, because a finding recorded without its row
+ * must still be shown rather than silently dropped.
+ */
+function describe(finding: Finding): string {
+  const row = sourceRow(finding);
+  const id = String(finding.record_id);
+  switch (finding.record_type) {
+    case 'account':
+    case 'account_email':
+    case 'customer':
+      return str(row.email) ?? id;
+    case 'order':
+      return str(row.order_number) ?? `order ${id}`;
+    case 'order_item': {
+      // The sku goes first because the same product legitimately appears on
+      // several orders, and a list of repeated product names reads as a bug
+      // rather than as distinct line items.
+      const sku = str(row.sku);
+      const name = str(row.product_name);
+      if (sku && name) return `${sku} · ${name}`;
+      return sku ?? name ?? `item ${id}`;
+    }
+    case 'refund':
+    case 'retained_refund': {
+      // A refund row references its order by id, not by order number, so the
+      // amount is the only detail on it that means anything to a reader - and
+      // for the withheld one it is the whole point: money still owed.
+      const order = str(row.source_order_number) ?? str(row.order_number);
+      const amount =
+        typeof row.amount_cents === 'number'
+          ? `$${(row.amount_cents / 100).toFixed(2)}`
+          : undefined;
+      if (order && amount) return `${order} · ${amount}`;
+      return order ?? amount ?? `refund ${id}`;
+    }
+    case 'support_ticket':
+      return str(row.subject) ?? `ticket ${id}`;
+    case 'upload':
+    case 'object':
+      return str(row.object_key) ?? str(finding.locator) ?? id;
+    case 'event':
+      // Event findings are recorded as bare ids: the adapter deliberately does
+      // not return hundreds of full log rows, so there is no row to name.
+      return str(row.path)
+        ? `${str(row.method) ?? ''} ${str(row.path)}`.trim()
+        : `entry ${id}`;
+    default:
+      return id;
+  }
+}
+
+const GROUP_NOTES: Record<string, string> = {
+  customer:
+    'The customer record is kept as a tombstone. The card, charge history, name and email are redacted.',
+  event:
+    'Recorded by id. The adapter returns ids rather than full log rows, so these are not named individually.',
+  retained_refund: 'Withheld. A live financial obligation cannot be erased.',
+};
+
+/** Group one system's findings by record type, naming a sample of each. */
+function groupFindings(findings: Finding[]): RecordGroup[] {
+  const byType = new Map<string, Finding[]>();
+  for (const finding of findings) {
+    const bucket = byType.get(finding.record_type);
+    if (bucket) bucket.push(finding);
+    else byType.set(finding.record_type, [finding]);
+  }
+
+  return [...byType.entries()]
+    .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+    .map(([record_type, group]) => ({
+      record_type,
+      count: group.length,
+      items: group.slice(0, ITEMS_PER_GROUP).map((finding) => ({
+        record_id: String(finding.record_id),
+        label: describe(finding),
+      })),
+      hidden: Math.max(0, group.length - ITEMS_PER_GROUP),
+      note: GROUP_NOTES[record_type],
+    }));
+}
+
 export function buildCaseView(record: CaseRecord): CaseView {
   const findings = record.findings ?? [];
   const withheldFindings = findings.filter((f) => f.disposition !== 'erase');
@@ -177,16 +317,21 @@ export function buildCaseView(record: CaseRecord): CaseView {
       label: SYSTEM_LABELS[key].label,
       unit: SYSTEM_LABELS[key].unit,
       count: perSystem[key] || 0,
+      groups: groupFindings(findings.filter((f) => f.system === key)),
     }),
   );
   // Identity is not a storage system - it is how many addresses this person is
   // known by, which is the reason discovery has to look beyond the one email
   // that was typed in.
+  const emailFindings = findings.filter(
+    (f) => f.record_type === 'account_email',
+  );
   systems.push({
     key: 'identity',
     label: 'Identity',
     unit: 'emails',
-    count: findings.filter((f) => f.record_type === 'account_email').length,
+    count: emailFindings.length,
+    groups: groupFindings(emailFindings),
   });
 
   const latestPlan = record.plans?.length
