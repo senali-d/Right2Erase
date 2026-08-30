@@ -14,6 +14,34 @@
 import pg from 'pg';
 import { DEFAULT_DATABASE_URL } from './truth-core.js';
 
+/** Largest value a PostgreSQL bigint - and so a BIGSERIAL id - can hold. */
+const BIGINT_MAX = 9223372036854775807n;
+
+/**
+ * The canonical decimal spelling of a positive bigint id, or null.
+ *
+ * Exported because the caller has to key its lookup the same way this keys its
+ * query. Two spellings of one id are the failure here: "007" and "7" pass the
+ * same validation and select the same row, but PostgreSQL returns the id as 7,
+ * so a lookup by the original string misses and the record silently renders
+ * unenriched. Normalising once, in the place that also builds the query, is
+ * what stops the two sides drifting.
+ *
+ * Out-of-range values are rejected here rather than sent: bigint[] rejects the
+ * whole array if any element overflows, so one impossible id would suppress
+ * enrichment for every valid one alongside it.
+ *
+ * @param {string | number | bigint} value
+ * @returns {string | null}
+ */
+export function canonicalEventId(value) {
+  const raw = String(value).trim();
+  if (!/^\d+$/.test(raw)) return null;
+  const parsed = BigInt(raw);
+  if (parsed <= 0n || parsed > BIGINT_MAX) return null;
+  return parsed.toString();
+}
+
 /**
  * @param {object} [options]
  * @param {string} [options.connectionString]
@@ -29,9 +57,13 @@ export async function fetchEventRows({
   // int[] cast fails outright past 2^31 - both silently, on exactly the large
   // ids a long-lived log produces. src/postgres-executor.js validates the same
   // way for the same reason.
-  const wanted = ids
-    .map((id) => String(id).trim())
-    .filter((id) => /^\d+$/.test(id) && BigInt(id) > 0n);
+  //
+  // Anything unusable is dropped rather than passed through: one malformed or
+  // out-of-range id in the array would fail the cast and take every valid id
+  // with it.
+  const wanted = [
+    ...new Set(ids.map(canonicalEventId).filter((id) => id !== null)),
+  ];
   if (wanted.length === 0) return [];
 
   const client = new pg.Client({ connectionString });

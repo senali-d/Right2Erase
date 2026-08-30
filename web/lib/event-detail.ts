@@ -1,4 +1,7 @@
-import { fetchEventRows } from '../../fixture/scripts/event-detail.js';
+import {
+  canonicalEventId,
+  fetchEventRows,
+} from '../../fixture/scripts/event-detail.js';
 import type { CaseRecord, Finding } from './mcp';
 
 /**
@@ -32,9 +35,12 @@ type EventRow = { id: string | number };
 
 export async function withEventDetail(record: CaseRecord): Promise<CaseRecord> {
   const findings = record.findings ?? [];
+  // Canonicalised before the cap, so an unusable id cannot consume one of the
+  // slots a real one needed.
   const ids = findings
     .filter((f) => f.record_type === 'event')
-    .map((f) => String(f.record_id))
+    .map((f) => canonicalEventId(f.record_id))
+    .filter((id): id is string => id !== null)
     .slice(0, MAX_LOOKUP);
   if (ids.length === 0) return record;
 
@@ -50,12 +56,18 @@ export async function withEventDetail(record: CaseRecord): Promise<CaseRecord> {
     return record;
   }
 
-  const byId = new Map(rows.map((row) => [String(row.id), row]));
+  // Both sides keyed through the same normaliser. PostgreSQL answers with the
+  // canonical spelling of an id, so a finding recorded as "007" would never
+  // match a row returned as 7 if either side keyed on its raw string.
+  const byId = new Map(
+    rows.map((row) => [canonicalEventId(row.id) ?? String(row.id), row]),
+  );
   return {
     ...record,
     findings: findings.map((finding: Finding) => {
       if (finding.record_type !== 'event') return finding;
-      const row = byId.get(String(finding.record_id));
+      const key = canonicalEventId(finding.record_id);
+      const row = key ? byId.get(key) : undefined;
       return row ? { ...finding, metadata: { row } } : finding;
     }),
   };
