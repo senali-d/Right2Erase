@@ -1,0 +1,56 @@
+import { fetchEventRows } from '../../fixture/scripts/event-detail.js';
+import type { CaseRecord, Finding } from './mcp';
+
+/**
+ * Fill in the event-log rows behind event findings, for display only.
+ *
+ * An event finding stores nothing but its id. That is deliberate: a subject
+ * routinely has hundreds of log entries, and db_search_event_log returns ids
+ * rather than rows precisely so an investigation is not buried in payload it
+ * does not need. The cost is that the one trap the log exists to demonstrate -
+ * the identity chain, where months of history sit under an address the subject
+ * no longer uses - showed in the UI as "entry 6".
+ *
+ * So the rows are read here, on the server, at render time. This is a read for
+ * a human looking at a page: it adds nothing to any tool, changes no finding,
+ * and takes the same route the verification panel already uses.
+ *
+ * After execution the rows are gone, which is the erasure having worked. Those
+ * findings keep their id-only label.
+ */
+
+/** Enough to name every row a panel will show, without reading a whole log. */
+const MAX_LOOKUP = 200;
+
+type EventRow = { id: number };
+
+export async function withEventDetail(record: CaseRecord): Promise<CaseRecord> {
+  const findings = record.findings ?? [];
+  const ids = findings
+    .filter((f) => f.record_type === 'event')
+    .map((f) => f.record_id)
+    .slice(0, MAX_LOOKUP);
+  if (ids.length === 0) return record;
+
+  let rows: EventRow[] = [];
+  try {
+    rows = (await fetchEventRows({
+      connectionString: process.env.DATABASE_URL,
+      ids,
+    })) as EventRow[];
+  } catch {
+    // Display detail is not worth failing a case view over. Without it the
+    // findings render by id, exactly as they did before.
+    return record;
+  }
+
+  const byId = new Map(rows.map((row) => [String(row.id), row]));
+  return {
+    ...record,
+    findings: findings.map((finding: Finding) => {
+      if (finding.record_type !== 'event') return finding;
+      const row = byId.get(String(finding.record_id));
+      return row ? { ...finding, metadata: { row } } : finding;
+    }),
+  };
+}

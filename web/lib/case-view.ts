@@ -279,12 +279,20 @@ function describe(finding: Finding): string {
     case 'upload':
     case 'object':
       return str(row.object_key) ?? str(finding.locator) ?? id;
-    case 'event':
-      // Event findings are recorded as bare ids: the adapter deliberately does
-      // not return hundreds of full log rows, so there is no row to name.
-      return str(row.path)
-        ? `${str(row.method) ?? ''} ${str(row.path)}`.trim()
-        : `entry ${id}`;
+    case 'event': {
+      // Event findings are stored as bare ids - the adapter returns ids rather
+      // than hundreds of rows - so the row here was filled in for display (see
+      // lib/event-detail). The address comes first: months of this subject's
+      // history sit under an address they no longer use, and seeing which
+      // entries were filed under the old one is the identity-chain trap made
+      // visible rather than asserted.
+      const path = str(row.path);
+      if (!path) return `entry ${id}`;
+      const request = `${str(row.method) ?? ''} ${path}`.trim();
+      const who = str(row.email) ?? str(row.ip_address);
+      const when = str(row.ts)?.slice(0, 10);
+      return [who, request, when].filter(Boolean).join(' · ');
+    }
     default:
       return id;
   }
@@ -294,7 +302,7 @@ const GROUP_NOTES: Record<string, string> = {
   customer:
     'The customer record is kept as a tombstone. The card, charge history, name and email are redacted.',
   event:
-    'Recorded by id. The adapter returns ids rather than full log rows, so these are not named individually.',
+    'Stored as ids only - the adapter returns ids rather than hundreds of rows. The detail shown here is read from the log for display, so it is gone once these rows are.',
   retained_refund: 'Withheld. A live financial obligation cannot be erased.',
 };
 
