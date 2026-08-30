@@ -24,9 +24,14 @@ export async function fetchEventRows({
   connectionString = DEFAULT_DATABASE_URL,
   ids = [],
 } = {}) {
+  // event_log.id is BIGSERIAL, so ids are kept as decimal strings and bound as
+  // bigint[]. Narrowing them to JS numbers loses precision past 2^53, and an
+  // int[] cast fails outright past 2^31 - both silently, on exactly the large
+  // ids a long-lived log produces. src/postgres-executor.js validates the same
+  // way for the same reason.
   const wanted = ids
-    .map((id) => Number(id))
-    .filter((id) => Number.isInteger(id) && id > 0);
+    .map((id) => String(id).trim())
+    .filter((id) => /^\d+$/.test(id) && BigInt(id) > 0n);
   if (wanted.length === 0) return [];
 
   const client = new pg.Client({ connectionString });
@@ -34,7 +39,7 @@ export async function fetchEventRows({
   try {
     const { rows } = await client.query(
       `SELECT id, ts, email, ip_address, method, path
-         FROM event_log WHERE id = ANY($1::int[])`,
+         FROM event_log WHERE id = ANY($1::bigint[])`,
       [wanted],
     );
     // pg hands back a Date for a timestamptz. Everything downstream treats a

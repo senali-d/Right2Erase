@@ -22,13 +22,19 @@ import type { CaseRecord, Finding } from './mcp';
 /** Enough to name every row a panel will show, without reading a whole log. */
 const MAX_LOOKUP = 200;
 
-type EventRow = { id: number };
+/**
+ * event_log.id is BIGSERIAL, and node-postgres hands bigint back as a string
+ * rather than risk a lossy Number. Ids stay strings the whole way through -
+ * matched as strings, keyed as strings - so a large id is never rounded on its
+ * way to becoming a map key it no longer matches.
+ */
+type EventRow = { id: string | number };
 
 export async function withEventDetail(record: CaseRecord): Promise<CaseRecord> {
   const findings = record.findings ?? [];
   const ids = findings
     .filter((f) => f.record_type === 'event')
-    .map((f) => f.record_id)
+    .map((f) => String(f.record_id))
     .slice(0, MAX_LOOKUP);
   if (ids.length === 0) return record;
 
