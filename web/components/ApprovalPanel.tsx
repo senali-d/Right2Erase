@@ -23,6 +23,10 @@ export function ApprovalPanel({
 }) {
   const [approvedBy, setApprovedBy] = useState('demo-operator');
   const [confirming, setConfirming] = useState(false);
+  // Collapsed by default: the counts are the summary an operator scans, and the
+  // record list is what they open when they want to check it rather than
+  // trust it.
+  const [showingPlan, setShowingPlan] = useState(false);
   const plan = view.plan;
 
   if (!plan) {
@@ -74,6 +78,61 @@ export function ApprovalPanel({
         </div>
       </dl>
 
+      {plan.actions.length > 0 ? (
+        <div className="mt-4 border-t border-line pt-4">
+          <button
+            type="button"
+            onClick={() => setShowingPlan(!showingPlan)}
+            aria-expanded={showingPlan}
+            className="text-[11px] text-ink-dim underline-offset-2 hover:text-ink hover:underline"
+          >
+            {showingPlan ? 'Hide the plan' : 'Review the plan record by record'}
+          </button>
+
+          {showingPlan ? (
+            <div className="mt-3 divide-y divide-line rounded border border-line">
+              {plan.actions.map((group) => (
+                <div key={group.record_type} className="px-3 py-2.5">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-ink">
+                      {group.record_type.replace(/_/g, ' ')}
+                      {/* The plan spans all three systems, so an uploaded
+                          file appears twice - once as its index row, once as
+                          the object. Naming the system is what tells them
+                          apart. */}
+                      <span className="ml-2 text-[10px] text-ink-faint">
+                        {SYSTEM_LABEL[group.system] ?? group.system}
+                      </span>
+                    </span>
+                    <span className="tabular-nums text-[11px] text-ink-dim">
+                      {group.count.toLocaleString()}
+                    </span>
+                  </div>
+                  <ul className="mt-1 space-y-0.5">
+                    {group.items.map((item) => (
+                      <li
+                        key={`${group.record_type}:${item.record_id}`}
+                        className="flex items-baseline gap-2 text-[11px]"
+                      >
+                        <span className="text-ink-faint">·</span>
+                        <span className="break-all text-ink-dim">
+                          {item.label}
+                        </span>
+                      </li>
+                    ))}
+                    {group.hidden > 0 ? (
+                      <li className="pl-4 text-[11px] text-ink-faint">
+                        + {group.hidden.toLocaleString()} more
+                      </li>
+                    ) : null}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
+
       <div className="mt-5 space-y-1 border-t border-line pt-4">
         <div className="text-[10px] uppercase tracking-[0.14em] text-ink-faint">
           Plan hash
@@ -81,6 +140,11 @@ export function ApprovalPanel({
         <code className="block break-all text-[11px] leading-relaxed text-ink-dim">
           {plan.plan_hash}
         </code>
+        <p className="text-[10px] leading-relaxed text-ink-faint">
+          The hash covers exactly the records listed above. Right2Erase
+          re-derives it before executing, so approving one plan cannot execute
+          another.
+        </p>
       </div>
 
       <div className="mt-4">

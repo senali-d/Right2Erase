@@ -19,6 +19,8 @@ export type RecordItem = {
 };
 
 export type RecordGroup = {
+  /** Which system holds these. Only worth showing where a view spans several. */
+  system: string;
   record_type: string;
   count: number;
   /** A sample, not the whole set - see ITEMS_PER_GROUP. */
@@ -74,6 +76,15 @@ export type CaseView = {
     delete_count: number;
     withheld_count: number;
     by_system: Record<string, number>;
+    /**
+     * The actions this plan will execute, named and grouped.
+     *
+     * Built from the stored plan rather than from the findings, because the
+     * plan is the artifact that gets hashed, approved and executed - an
+     * operator approving a hash should be able to read what that hash commits
+     * them to, not a summary of what was discovered nearby.
+     */
+    actions: RecordGroup[];
   } | null;
   approval: {
     approved_by: string;
@@ -281,24 +292,31 @@ const GROUP_NOTES: Record<string, string> = {
 
 /** Group one system's findings by record type, naming a sample of each. */
 function groupFindings(findings: Finding[]): RecordGroup[] {
+  // Keyed by system as well as type, because an uploaded file is two records:
+  // the index row in Postgres and the object itself in storage. They share a
+  // key, so grouping on type alone lists the same path twice with nothing to
+  // say why - which reads as a duplication bug rather than as the two distinct
+  // deletions it actually is.
   const byType = new Map<string, Finding[]>();
   for (const finding of findings) {
-    const bucket = byType.get(finding.record_type);
+    const key = `${finding.system}:${finding.record_type}`;
+    const bucket = byType.get(key);
     if (bucket) bucket.push(finding);
-    else byType.set(finding.record_type, [finding]);
+    else byType.set(key, [finding]);
   }
 
   return [...byType.entries()]
     .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
-    .map(([record_type, group]) => ({
-      record_type,
+    .map(([, group]) => ({
+      system: group[0].system,
+      record_type: group[0].record_type,
       count: group.length,
       items: group.slice(0, ITEMS_PER_GROUP).map((finding) => ({
         record_id: String(finding.record_id),
         label: describe(finding),
       })),
       hidden: Math.max(0, group.length - ITEMS_PER_GROUP),
-      note: GROUP_NOTES[record_type],
+      note: GROUP_NOTES[group[0].record_type],
     }));
 }
 
@@ -340,6 +358,21 @@ export function buildCaseView(record: CaseRecord): CaseView {
   const planActions = latestPlan?.body?.actions ?? [];
   const planErase = planActions.filter((a) => a.disposition === 'erase');
 
+  // A plan action carries only the identity triple, so on its own it can say
+  // "order 4" and never "SK-08004". The finding it came from holds the source
+  // row, so the plan supplies what will be deleted and the finding supplies
+  // what to call it. An action with no matching finding still renders, by id:
+  // an unexplained entry in a deletion plan is the last thing to hide.
+  const findingByKey = new Map(
+    findings.map((f) => [`${f.system}:${f.record_type}:${f.record_id}`, f]),
+  );
+  const namedPlanActions = planErase.map(
+    (action) =>
+      findingByKey.get(
+        `${action.system}:${action.record_type}:${action.record_id}`,
+      ) ?? ({ ...action, metadata: undefined } as unknown as Finding),
+  );
+
   const latestApproval = record.approvals?.length
     ? record.approvals[record.approvals.length - 1]
     : null;
@@ -369,6 +402,7 @@ export function buildCaseView(record: CaseRecord): CaseView {
           delete_count: planErase.length,
           withheld_count: planActions.length - planErase.length,
           by_system: countBySystem(planErase),
+          actions: groupFindings(namedPlanActions),
         }
       : null,
     approval: latestApproval
