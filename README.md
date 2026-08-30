@@ -279,8 +279,33 @@ the hard way:
 
 ## Qodo Code Review Evidence
 
-Qodo reviewed PR #1 (ShopKart fixture). The review and remediation history are
-available in the GitHub PR: https://github.com/senali-d/Right2Erase/pull/1
+Qodo reviews every PR in this repository automatically, and re-reviews again
+each time a fix is pushed. The clearest example is
+[PR #18](https://github.com/senali-d/Right2Erase/pull/18), which touches the
+code that turns a bare event-log row into the human-readable record shown on
+the approval screen. Qodo surfaced that event ids were cast to Postgres
+`int` when the column is actually `bigserial` (silently breaking above
+2,147,483,647), that canonicalised ids with leading zeros never matched what
+Postgres returns, and that deduplication happened after a lookup cap instead
+of before it, letting duplicate ids crowd out real ones. All three were
+fixed, not dismissed - each in its own commit before merge:
+
+| Review round  | Finding                                                      | Fix commit                                                                                                                        |
+| ------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| 1 (07:23 UTC) | event ids cast to `int`, not `bigint`                        | [`987824b`](https://github.com/senali-d/Right2Erase/commit/987824b) keep event_log ids as bigint through the display lookup       |
+| 2 (07:31 UTC) | leading-zero ids never match; oversized ids abort enrichment | [`f55da9a`](https://github.com/senali-d/Right2Erase/commit/f55da9a) canonicalise event ids and drop unusable ones before querying |
+| 3 (07:46 UTC) | duplicate ids consumed the lookup cap before dedup           | [`c8f1e1b`](https://github.com/senali-d/Right2Erase/commit/c8f1e1b) deduplicate event ids before applying the lookup cap          |
+
+Rounds 2 and 3 each found a new bug that only existed because of the previous
+round's own fix, and the PR merged as
+[`bca299b`](https://github.com/senali-d/Right2Erase/commit/bca299b) right
+after round 3's finding was addressed - so the last review ran against the
+code that actually shipped, not an earlier draft of it.
+
+PR #1 (ShopKart fixture) is a second example, and includes a self-contradictory
+ground-truth manifest that Qodo caught before it could quietly grade the agent
+against an answer that was itself impossible to execute:
+https://github.com/senali-d/Right2Erase/pull/1
 
 ## Existing compatibility commands
 
