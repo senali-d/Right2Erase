@@ -104,8 +104,17 @@ async function main() {
     name: 'plan-manifest-builder',
     version: '1.0.0',
   });
+  // Same precedence as every other client here - a per-server token if one is
+  // issued, otherwise the shared one. Without it this exits 401 the moment
+  // MCP_AUTH_TOKEN is set, which is exactly when someone reaches for it.
+  const token =
+    process.env.MCP_AUTH_TOKEN_OUBLIETTE || process.env.MCP_AUTH_TOKEN;
   await client.connect(
-    new StreamableHTTPClientTransport(new URL(MCP_SERVERS.oubliette)),
+    new StreamableHTTPClientTransport(new URL(MCP_SERVERS.oubliette), {
+      requestInit: token
+        ? { headers: { authorization: `Bearer ${token}` } }
+        : undefined,
+    }),
   );
   try {
     const caseRecord = parseResult(
