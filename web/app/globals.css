@@ -60,3 +60,17 @@ body {
   scrollbar-width: thin;
   scrollbar-color: var(--color-line-bright) transparent;
 }
+
+/*
+ * Tailwind v4's preflight dropped the pointer cursor on buttons, so every
+ * control here - the phase rail, the system cards, the plan toggles, the
+ * approval buttons - showed an arrow and read as inert text. Restored once
+ * rather than per component, so a control added later is not silently the
+ * exception. Disabled controls keep the default, since a hand over something
+ * that will not respond is worse than no hand at all.
+ */
+button:not(:disabled),
+[role='button']:not(:disabled),
+summary {
+  cursor: pointer;
+}
