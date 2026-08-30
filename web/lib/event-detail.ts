@@ -35,13 +35,18 @@ type EventRow = { id: string | number };
 
 export async function withEventDetail(record: CaseRecord): Promise<CaseRecord> {
   const findings = record.findings ?? [];
-  // Canonicalised before the cap, so an unusable id cannot consume one of the
-  // slots a real one needed.
-  const ids = findings
-    .filter((f) => f.record_type === 'event')
-    .map((f) => canonicalEventId(f.record_id))
-    .filter((id): id is string => id !== null)
-    .slice(0, MAX_LOOKUP);
+  // Canonicalised and deduplicated before the cap, so neither an unusable id
+  // nor a repeat can consume a slot a distinct one needed. Duplicates are not
+  // hypothetical: the engine dedupes event ids per account, so a case covering
+  // two accounts that share an IP records the same id under each of them.
+  const ids = [
+    ...new Set(
+      findings
+        .filter((f) => f.record_type === 'event')
+        .map((f) => canonicalEventId(f.record_id))
+        .filter((id): id is string => id !== null),
+    ),
+  ].slice(0, MAX_LOOKUP);
   if (ids.length === 0) return record;
 
   let rows: EventRow[] = [];
