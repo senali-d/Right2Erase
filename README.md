@@ -9,6 +9,22 @@ and why, a sandbox rehearsal whose first attempt failed on a foreign key and
 passed on retry, and a decision that has not been made
 yet](docs/images/approval-gate.png)
 
+**Demo video:** <https://youtu.be/DD4SNvi9CEw> (3 minutes)
+
+<details>
+<summary>Requirement is met</summary>
+
+| Requirement                          | Where it is met                                                                                                                                                                                                                     |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent runs on the TrueForge harness  | [How the TrueForge harness is used](#how-the-trueforge-harness-is-used) - the loop, MCP-only tool surface, and the approval pause are all TrueForge's                                                                               |
+| A real tool reached                  | Four MCP servers registered with the harness; the agent has no other way to touch ShopKart                                                                                                                                          |
+| Code run in a sandbox                | Every plan is rehearsed against a throwaway Postgres replica before a human sees it - see [What you'll see](#what-youll-see). The TrueForge sandbox itself is off, [for a reason worth reading](#how-the-trueforge-harness-is-used) |
+| A pause before anything irreversible | `require_approval_for_tools` suspends the run on `oubliette_execute_erasure`; nothing is deleted without a typed human approval                                                                                                     |
+| Qodo-reviewed pull requests          | [Qodo Code Review Evidence](#qodo-code-review-evidence)                                                                                                                                                                             |
+| Public repo, functional README       | This file; MIT licensed                                                                                                                                                                                                             |
+
+</details>
+
 ## The problem
 
 "Delete my data" sounds like one operation. It is not. A single customer's
@@ -255,17 +271,39 @@ servers, and the model provider over TrueForge's API, so **the TrueForge UI is
 never needed to configure anything**. It is idempotent: re-run it after editing
 the agent.
 
-Two deliberate configuration choices are worth knowing, because both were found
-the hard way:
+### Why the TrueForge sandbox is off, and what runs instead
 
-- **The sandbox is off.** Enabling it also enables Code Mode, which routes every
-  MCP call through a generic wrapper - and `require_approval_for_tools` matches
-  the tool the model names, so the wrapper made the approval gate silently stop
-  firing. The gate is the point of the demo, so the sandbox goes.
-- **Tools are not preloaded**, so TrueForge dispatches them through a `call_tool`
-  wrapper and reports that wrapper's name on the event stream. `web/lib/trueforge-runs.ts`
-  unwraps it to recover the real tool, which is what drives the phase rail, the
-  case id, and the rehearsal transcript.
+This is the one harness feature Right2Erase deliberately does not use, so it is
+worth being direct about why.
+
+Turning the sandbox on also turns on Code Mode, which routes every MCP call
+through a generic `call_tool` wrapper. `require_approval_for_tools` matches on
+the tool name the model asks for - and with the wrapper in the way, that name is
+always `call_tool`, never `oubliette_execute_erasure`. **Verified empirically:
+with the sandbox enabled, asking the agent to execute the erasure produced no
+`tool.approval_required` event at all.** The harness would have deleted a real
+customer's data without ever pausing.
+
+Given a choice between sandboxed code execution and a human gate on an
+irreversible delete, this project takes the gate every time. The finding is
+recorded in `agent/oubliette-agent.json` next to the setting itself, so the next
+person to reach for it knows what it costs.
+
+Sandboxed execution is not lost, only moved somewhere the safety argument
+survives. Every plan is rehearsed against a **throwaway Postgres replica** of the
+subject's records - real schema, real foreign keys - and the deletion is run there
+and rolled back before any human is asked to approve it. In the demo run that
+rehearsal _fails_ on first attempt with a foreign-key violation and passes on
+retry in leaf-to-root order, which is exactly the class of bug a sandbox exists to
+catch. A plan that has not survived it is never offered for approval, and the
+snapshot is destroyed afterwards because it is itself a full copy of the person's
+data.
+
+One smaller configuration note, also found the hard way: **tools are not
+preloaded**, so TrueForge dispatches them through a `call_tool` wrapper and
+reports that wrapper's name on the event stream. `web/lib/trueforge-runs.ts`
+unwraps it to recover the real tool, which is what drives the phase rail, the
+case id, and the rehearsal transcript.
 
 ## Repository
 
@@ -274,13 +312,18 @@ the hard way:
 - `agent/` - both engines: the deterministic script (`trueforge-agent.js`, `create-agent.js`) and the TrueForge agent definition (`oubliette-agent.json`)
 - `src/` - Right2Erase: the case store, plans, approvals, and the sole destructive path
 - `web/` - the Data Erasure Control Center (Next.js)
-- `docs/` - architecture, capability map, and Phase 0 evidence
+- `docs/images/` - the screenshots used in this README
 - `Dockerfile`, `railway.json`, `scripts/railway-*.sh` - the single-container deployment
 
 ## Qodo Code Review Evidence
 
-Qodo reviews every PR in this repository automatically, and re-reviews again
-each time a fix is pushed. The clearest example is
+Every change to this project after the initial commit arrived through a
+Qodo-reviewed pull request - `main` is 17 merge commits and nothing else, with no
+direct pushes. Qodo reviews each PR automatically and re-reviews on every
+subsequent push, so the final review always ran against the code that actually
+shipped. Two are worth reading in full.
+
+The clearest example is
 [PR #18](https://github.com/senali-d/Right2Erase/pull/18), which touches the
 code that turns a bare event-log row into the human-readable record shown on
 the approval screen. Qodo surfaced that event ids were cast to Postgres
@@ -439,5 +482,9 @@ docker run --rm -p 3000:3000 -e OPENAI_API_KEY=sk-... -v right2erase-state:/data
 ```
 
 First boot runs `initdb` and seeds 200 ShopKart accounts, so give it a minute or
-two before the UI answers. Set `SEED_PROFILE=small` to seed 3 accounts instead —
+two before the UI answers. Set `SEED_PROFILE=small` to seed 3 accounts instead -
 faster to boot, and far fewer findings for the model to work through.
+
+## License
+
+MIT - see [LICENSE](LICENSE).
