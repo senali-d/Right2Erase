@@ -1,3 +1,6 @@
+'use client';
+
+import { useState } from 'react';
 import type { RecordGroup } from '@/lib/case-view';
 
 const SYSTEM_LABEL: Record<string, string> = {
@@ -5,6 +8,60 @@ const SYSTEM_LABEL: Record<string, string> = {
   minio: 'MinIO',
   billing: 'Billing',
 };
+
+/**
+ * A disclosure that opens the record list.
+ *
+ * Rendered as a real control rather than a line of dim text with a hover
+ * underline. Hover is not an affordance - it only tells you a thing was
+ * clickable once you have already guessed - and at the approval gate the
+ * consequence of not guessing is that an operator approves a deletion without
+ * ever discovering they could have read it.
+ */
+export function RecordDisclosure({
+  groups,
+  label,
+  labelOpen,
+  showSystem = false,
+}: {
+  groups: RecordGroup[];
+  label: string;
+  labelOpen: string;
+  showSystem?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  if (groups.length === 0) return null;
+
+  const total = groups.reduce((sum, group) => sum + group.count, 0);
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        className="flex w-full items-center gap-2 rounded border border-line-bright bg-surface px-3 py-2 text-left text-ink transition-colors hover:border-accent hover:text-accent"
+      >
+        <span
+          aria-hidden
+          className={`text-[10px] transition-transform ${open ? 'rotate-90' : ''}`}
+        >
+          ▶
+        </span>
+        <span className="flex-1">{open ? labelOpen : label}</span>
+        <span className="tabular-nums text-[11px] text-ink-faint">
+          {total.toLocaleString()}
+        </span>
+      </button>
+
+      {open ? (
+        <div className="mt-2">
+          <RecordGroups groups={groups} showSystem={showSystem} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
 
 /**
  * A list of records, grouped by kind and named.

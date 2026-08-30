@@ -2,7 +2,7 @@
 
 import { useState } from 'react';
 import { Panel } from '@/components/ui/Panel';
-import { RecordGroups } from '@/components/RecordGroups';
+import { RecordDisclosure } from '@/components/RecordGroups';
 import type { CaseView } from '@/lib/case-view';
 
 const SYSTEM_LABEL: Record<string, string> = {
@@ -24,10 +24,6 @@ export function ApprovalPanel({
 }) {
   const [approvedBy, setApprovedBy] = useState('demo-operator');
   const [confirming, setConfirming] = useState(false);
-  // Collapsed by default: the counts are the summary an operator scans, and the
-  // record list is what they open when they want to check it rather than
-  // trust it.
-  const [showingPlan, setShowingPlan] = useState(false);
   const plan = view.plan;
 
   if (!plan) {
@@ -79,24 +75,14 @@ export function ApprovalPanel({
         </div>
       </dl>
 
-      {plan.actions.length > 0 ? (
-        <div className="mt-4 border-t border-line pt-4">
-          <button
-            type="button"
-            onClick={() => setShowingPlan(!showingPlan)}
-            aria-expanded={showingPlan}
-            className="text-[11px] text-ink-dim underline-offset-2 hover:text-ink hover:underline"
-          >
-            {showingPlan ? 'Hide the plan' : 'Review the plan record by record'}
-          </button>
-
-          {showingPlan ? (
-            <div className="mt-3">
-              <RecordGroups groups={plan.actions} showSystem />
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+      <div className="mt-4 border-t border-line pt-4">
+        <RecordDisclosure
+          groups={plan.actions}
+          label="Review the plan record by record"
+          labelOpen="Hide the plan"
+          showSystem
+        />
+      </div>
 
       <div className="mt-5 space-y-1 border-t border-line pt-4">
         <div className="text-[10px] uppercase tracking-[0.14em] text-ink-faint">
