@@ -1,5 +1,6 @@
 import { Panel, Field } from '@/components/ui/Panel';
 import { Badge } from '@/components/ui/Badge';
+import { RecordDisclosure } from '@/components/RecordGroups';
 import type { CaseView } from '@/lib/case-view';
 
 const SYSTEM_LABEL: Record<string, string> = {
@@ -37,6 +38,15 @@ export function CertificatePanel({ view }: { view: CaseView }) {
           </dd>
         </div>
       </dl>
+
+      <div className="mt-4 border-t border-line pt-4">
+        <RecordDisclosure
+          groups={cert.actions}
+          label="See exactly what was deleted"
+          labelOpen="Hide what was deleted"
+          showSystem
+        />
+      </div>
 
       <div className="mt-5 grid gap-4 border-t border-line pt-4 sm:grid-cols-2">
         <Field label="Approved by">{cert.approved_by}</Field>

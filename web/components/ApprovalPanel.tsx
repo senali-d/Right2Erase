@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Panel } from '@/components/ui/Panel';
+import { RecordDisclosure } from '@/components/RecordGroups';
 import type { CaseView } from '@/lib/case-view';
 
 const SYSTEM_LABEL: Record<string, string> = {
@@ -74,6 +75,15 @@ export function ApprovalPanel({
         </div>
       </dl>
 
+      <div className="mt-4 border-t border-line pt-4">
+        <RecordDisclosure
+          groups={plan.actions}
+          label="Review the plan record by record"
+          labelOpen="Hide the plan"
+          showSystem
+        />
+      </div>
+
       <div className="mt-5 space-y-1 border-t border-line pt-4">
         <div className="text-[10px] uppercase tracking-[0.14em] text-ink-faint">
           Plan hash
@@ -81,6 +91,11 @@ export function ApprovalPanel({
         <code className="block break-all text-[11px] leading-relaxed text-ink-dim">
           {plan.plan_hash}
         </code>
+        <p className="text-[10px] leading-relaxed text-ink-faint">
+          The hash covers exactly the records listed above. Right2Erase
+          re-derives it before executing, so approving one plan cannot execute
+          another.
+        </p>
       </div>
 
       <div className="mt-4">
