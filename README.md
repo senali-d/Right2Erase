@@ -1,11 +1,13 @@
 # Right2Erase
 
 An agent that carries out a GDPR right-to-erasure request across four systems,
-and cannot delete anything until a human approves the exact plan it rehearsed.
+and cannot delete anything until a human approves - and can read - the exact
+plan it rehearsed.
 
-![The approval gate: what the agent found, what it refuses to delete, the
-rehearsal that proved the plan safe, and the human decision that has not been
-made yet](docs/images/approval-gate.png)
+![The approval gate: the four systems searched, the one record being withheld
+and why, a sandbox rehearsal whose first attempt failed on a foreign key and
+passed on retry, and a decision that has not been made
+yet](docs/images/approval-gate.png)
 
 ## The problem
 
@@ -118,8 +120,29 @@ what will not, and why - the unsettled refund on order SK-08004 is held back
 with its reason. The only way forward is a human typing their name and
 confirming twice.
 
+**And you can read the plan before you sign it.** Not a summary of it - the
+plan itself, every record it will delete, named the way the business names
+things rather than by row id.
+
+![The plan opened record by record: event-log entries listed with the address
+each was filed under, orders by number, objects by key, and the billing
+customer with a note that its record is kept as a
+tombstone](docs/images/plan-review.png)
+
+This is where the identity chain stops being a claim. The event log shows four
+entries under `ravi.s@oldmail.example`, dated up to August 2024, and four under
+the current address from October 2024 onward - the subject changed email in
+between. An agent that searched only the address you typed in would have found
+half of them and reported success.
+
+It is also where the plan hash becomes meaningful. The hash covers exactly the
+records on screen, and Right2Erase re-derives it before executing, so an
+approval cannot be replayed against a plan the operator never saw.
+
 **You approve, and it executes.** Each adapter reports what it actually deleted,
-and a certificate is issued that nothing can later edit.
+and a certificate is issued that nothing can later edit. The same record-by-record
+list is available here too, because "what was deleted" is a question that
+outlives the moment of approving it.
 
 ![Erasure complete: 29 Postgres records, 2 objects and 1 billing record deleted,
 1 withheld, with the approver and plan hash recorded](docs/images/certificate.png)
