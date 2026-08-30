@@ -14,14 +14,14 @@ yet](docs/images/approval-gate.png)
 <details>
 <summary>Requirement is met</summary>
 
-| Requirement                          | Where it is met                                                                                                                                                                                                                     |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Agent runs on the TrueForge harness  | [How the TrueForge harness is used](#how-the-trueforge-harness-is-used) - the loop, MCP-only tool surface, and the approval pause are all TrueForge's                                                                               |
-| A real tool reached                  | Four MCP servers registered with the harness; the agent has no other way to touch ShopKart                                                                                                                                          |
-| Code run in a sandbox                | Every plan is rehearsed against a throwaway Postgres replica before a human sees it - see [What you'll see](#what-youll-see). The TrueForge sandbox itself is off, [for a reason worth reading](#how-the-trueforge-harness-is-used) |
-| A pause before anything irreversible | `require_approval_for_tools` suspends the run on `oubliette_execute_erasure`; nothing is deleted without a typed human approval                                                                                                     |
-| Qodo-reviewed pull requests          | [Qodo Code Review Evidence](#qodo-code-review-evidence)                                                                                                                                                                             |
-| Public repo, functional README       | This file; MIT licensed                                                                                                                                                                                                             |
+| Requirement                          | Where it is met                                                                                                                                                                                                                                                                 |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Agent runs on the TrueForge harness  | [How the TrueForge harness is used](#how-the-trueforge-harness-is-used) - the loop, MCP-only tool surface, and the approval pause are all TrueForge's                                                                                                                           |
+| A real tool reached                  | Four MCP servers registered with the harness; the agent has no other way to touch ShopKart                                                                                                                                                                                      |
+| Code run in a sandbox                | Every plan is rehearsed against a throwaway SQLite snapshot carrying ShopKart's production foreign keys, before a human sees it - see [What you'll see](#what-youll-see). The TrueForge sandbox itself is off, [for a reason worth reading](#how-the-trueforge-harness-is-used) |
+| A pause before anything irreversible | `require_approval_for_tools` suspends the run on `oubliette_execute_erasure`; nothing is deleted without a typed human approval                                                                                                                                                 |
+| Qodo-reviewed pull requests          | [Qodo Code Review Evidence](#qodo-code-review-evidence)                                                                                                                                                                                                                         |
+| Public repo, functional README       | This file; MIT licensed                                                                                                                                                                                                                                                         |
 
 </details>
 
@@ -290,9 +290,11 @@ recorded in `agent/oubliette-agent.json` next to the setting itself, so the next
 person to reach for it knows what it costs.
 
 Sandboxed execution is not lost, only moved somewhere the safety argument
-survives. Every plan is rehearsed against a **throwaway Postgres replica** of the
-subject's records - real schema, real foreign keys - and the deletion is run there
-and rolled back before any human is asked to approve it. In the demo run that
+survives. Every plan is rehearsed against a **throwaway SQLite snapshot** of the
+subject's records - a self-contained file that mirrors the foreign-key
+constraints of ShopKart's production Postgres schema - and the deletion is run
+there inside a transaction that is always rolled back, before any human is asked
+to approve it. In the demo run that
 rehearsal _fails_ on first attempt with a foreign-key violation and passes on
 retry in leaf-to-root order, which is exactly the class of bug a sandbox exists to
 catch. A plan that has not survived it is never offered for approval, and the
